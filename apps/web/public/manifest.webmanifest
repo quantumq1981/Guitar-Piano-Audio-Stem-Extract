@@ -1,0 +1,17 @@
+{
+  "name": "Stem Splitter — Guitar & Piano",
+  "short_name": "Stems",
+  "description": "Isolate guitar (lead and rhythm) and piano from mixed music.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#14161a",
+  "theme_color": "#14161a",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }],
+  "share_target": {
+    "action": "/share-target",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": { "files": [{ "name": "audio", "accept": ["audio/*"] }] }
+  }
+}

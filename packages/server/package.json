@@ -1,0 +1,13 @@
+{
+  "name": "@stemsplit/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Tier 1 reference server + CLI: onnxruntime-node inference, FFmpeg codec, queued job API.",
+  "bin": { "stemsplit": "./src/cli.ts" },
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@stemsplit/core": "0.1.0",
+    "onnxruntime-node": "^1.31.1"
+  }
+}

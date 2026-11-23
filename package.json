@@ -1,0 +1,30 @@
+{
+  "name": "guitar-piano-stem-extract",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/core",
+    "packages/server",
+    "apps/web"
+  ],
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "typecheck": "tsc -p packages/core && tsc -p packages/server && tsc -p apps/web",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build:web": "npm run build -w apps/web",
+    "dev:web": "npm run dev -w apps/web",
+    "serve": "node packages/server/src/cli.ts serve",
+    "separate": "node packages/server/src/cli.ts separate",
+    "models:fetch": "node packages/server/src/cli.ts models fetch",
+    "bench": "node packages/server/src/cli.ts bench",
+    "e2e:browser": "node scripts/e2e/browser-smoke.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.1"
+  }
+}

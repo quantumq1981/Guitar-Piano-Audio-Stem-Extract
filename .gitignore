@@ -12,3 +12,4 @@ models/*.part
 out/
 stems-out/
 .data/
+.playwright-mcp/

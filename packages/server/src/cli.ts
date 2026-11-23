@@ -98,7 +98,9 @@ async function cmdServe(argv: string[]): Promise<void> {
     options: { port: { type: 'string' }, data: { type: 'string' }, threads: { type: 'string' }, rtf: { type: 'string' } },
   });
   const port = Number(values.port ?? process.env.PORT ?? 8787);
-  const publicBaseUrl = process.env.STEMSPLIT_PUBLIC_URL ?? `http://localhost:${port}`;
+  // Hugging Face Spaces inject SPACE_HOST (e.g. "owner-name.hf.space"), so signed links work with zero config there.
+  const publicBaseUrl =
+    process.env.STEMSPLIT_PUBLIC_URL ?? (process.env.SPACE_HOST ? `https://${process.env.SPACE_HOST}` : `http://localhost:${port}`);
   const secret = process.env.STEMSPLIT_SIGNING_SECRET ?? randomBytes(32).toString('hex');
   if (!process.env.STEMSPLIT_SIGNING_SECRET) log('STEMSPLIT_SIGNING_SECRET not set; using an ephemeral secret (URLs die on restart).');
   const model = PRIMARY_SEPARATION_MODEL;

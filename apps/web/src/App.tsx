@@ -12,7 +12,7 @@ const SCOPES: ReadonlyArray<{ id: SeparationScope; label: string; detail: string
 
 export function App() {
   const s = useSeparation();
-  const busy = ['decoding', 'model-download', 'local', 'uploading', 'server'].includes(s.phase.kind);
+  const busy = ['decoding', 'model-download', 'local', 'waking', 'uploading', 'server'].includes(s.phase.kind);
 
   return (
     <main className="app">
@@ -91,6 +91,8 @@ export function App() {
         return <Progress label="Downloading model (first run only)" fraction={p.fraction} />;
       case 'local':
         return <Progress label={`Separating on device${p.etaSec !== null ? ` · ~${p.etaSec}s left` : ''}`} fraction={p.fraction} />;
+      case 'waking':
+        return <p className="status">Waking the processing server. The first request after it has been idle can take a minute or two…</p>;
       case 'uploading':
         return <Progress label="Uploading" fraction={p.fraction} />;
       case 'queued-offline':

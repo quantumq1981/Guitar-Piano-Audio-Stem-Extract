@@ -20,6 +20,7 @@
 - GitHub Pages: `.github/workflows/pages.yml` (Source must be "GitHub Actions"). Build env `VITE_BASE=/<repo>/`, optional repo variable `VITE_API_BASE` (https).
 - All web paths must be base-relative (`import.meta.env.BASE_URL`, SW uses registration scope). Never hard-code `/`.
 - Pages cannot set headers: `public/sw.js` injects COOP/COEP (`require-corp`) and `main.tsx` reloads once for isolation.
+- Phone-only hosting: `deploy/huggingface-space/` (Docker Space, clones main, bakes model; `SPACE_HOST` → signed-URL base). PWA `create()` retries 502/503/504 while a sleeping Space wakes.
 - Production builds without `VITE_API_BASE` have no server (`API_BASE === null`); server-routed jobs are disabled with an explanation.
 
 ## Conventions / invariants

@@ -30,6 +30,7 @@ export type Phase =
   | { readonly kind: 'decoding' }
   | { readonly kind: 'model-download'; readonly fraction: number }
   | { readonly kind: 'local'; readonly fraction: number; readonly etaSec: number | null }
+  | { readonly kind: 'waking' }
   | { readonly kind: 'uploading'; readonly fraction: number }
   | { readonly kind: 'queued-offline' }
   | { readonly kind: 'server'; readonly job: JobRecord }
@@ -108,7 +109,7 @@ export function useSeparation() {
   async function runServer(f: File, request: CreateJobRequest): Promise<void> {
     if (!client) throw new NoServerError();
     setPhase({ kind: 'uploading', fraction: 0 });
-    const created = await client.create(request);
+    const created = await client.create(request, { onWaiting: () => setPhase({ kind: 'waking' }) });
     let job = await client.upload(created, f, (fraction) => setPhase({ kind: 'uploading', fraction }));
     for await (const next of client.watch(job)) {
       job = next;

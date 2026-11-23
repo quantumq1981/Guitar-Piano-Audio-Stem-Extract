@@ -40,9 +40,31 @@ export class ServerClient {
     return (await check(await fetch(`${this.baseUrl}/v1/models`))).json() as Promise<ModelManifest>;
   }
 
-  async create(req: CreateJobRequest): Promise<CreateJobResponse> {
-    const res = await fetch(`${this.baseUrl}/v1/jobs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(req) });
-    return (await check(res)).json() as Promise<CreateJobResponse>;
+  /**
+   * Create a job, riding out a sleeping host. Free-tier hosts (Hugging Face
+   * Spaces) sleep when idle and answer 502/503/504, or drop the connection, for
+   * up to a minute or two while waking. Safe to retry: the idempotency key
+   * makes a duplicate POST return the same job.
+   */
+  async create(req: CreateJobRequest, opts: { onWaiting?: (attempt: number) => void; maxWaitMs?: number } = {}): Promise<CreateJobResponse> {
+    const deadline = Date.now() + (opts.maxWaitMs ?? 180_000);
+    let delay = 2000;
+    for (let attempt = 1; ; attempt++) {
+      let res: Response | null = null;
+      try {
+        res = await fetch(`${this.baseUrl}/v1/jobs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(req) });
+      } catch {
+        res = null; // network error / connection reset while the host boots
+      }
+      const waking = res === null || res.status === 502 || res.status === 503 || res.status === 504;
+      if (!waking || Date.now() + delay > deadline) {
+        if (res === null) throw new ApiError(0, 'network', 'Could not reach the processing server');
+        return (await check(res)).json() as Promise<CreateJobResponse>;
+      }
+      opts.onWaiting?.(attempt);
+      await new Promise((r) => setTimeout(r, delay));
+      delay = Math.min(delay * 1.5, 15_000);
+    }
   }
 
   /** XHR because fetch() still has no upload-progress events. */

@@ -1,0 +1,9 @@
+node_modules
+**/node_modules
+apps
+out
+models
+.data
+.git
+*.mp3
+docs

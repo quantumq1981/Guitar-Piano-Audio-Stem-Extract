@@ -1,0 +1,11 @@
+{
+  "name": "@stemsplit/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Runtime-agnostic separation core: routing, memory budgets, chunked overlap-add, WAV codec, job API contract.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "sideEffects": false
+}

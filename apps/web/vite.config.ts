@@ -3,8 +3,9 @@ import react from '@vitejs/plugin-react';
 
 /**
  * Cross-origin isolation (COOP + COEP) is required for SharedArrayBuffer, i.e.
- * multithreaded WASM. `credentialless` keeps cross-origin model fetches from
- * Hugging Face working without CORP headers on their CDN.
+ * multithreaded WASM. `require-corp` (not `credentialless`, which Safari lacks):
+ * every cross-origin fetch we make is CORS-mode, which require-corp permits.
+ * On hosts that cannot set headers (GitHub Pages) public/sw.js injects them.
  *
  * ORT's WASM binary is referenced via `new URL(…, import.meta.url)` inside
  * onnxruntime-web, so Vite emits it as a content-hashed asset under /assets/,
@@ -12,10 +13,12 @@ import react from '@vitejs/plugin-react';
  */
 const isolationHeaders = {
   'Cross-Origin-Opener-Policy': 'same-origin',
-  'Cross-Origin-Embedder-Policy': 'credentialless',
+  'Cross-Origin-Embedder-Policy': 'require-corp',
 };
 
 export default defineConfig({
+  // GitHub Pages project sites live under /<repo>/; the Pages workflow sets VITE_BASE.
+  base: process.env.VITE_BASE ?? '/',
   plugins: [react()],
   server: { headers: isolationHeaders },
   preview: { headers: isolationHeaders },

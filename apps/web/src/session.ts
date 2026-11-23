@@ -12,7 +12,18 @@ import { LocalAbortError, runLocal } from './inference/local-client.ts';
 import { gatherCapabilities } from './platform/probe.ts';
 import { outbox, requestBackgroundFlush } from './platform/outbox.ts';
 
-export const API_BASE: string = (import.meta.env.VITE_API_BASE as string | undefined) ?? 'http://localhost:8787';
+/**
+ * Processing-server base URL. Static hosts (GitHub Pages) serve only the PWA, so
+ * a production build without VITE_API_BASE has *no* server: device-eligible jobs
+ * still run, server-routed ones explain why they cannot. An https page also
+ * cannot call an http API (mixed content), so production values must be https.
+ */
+const configuredApi = (import.meta.env.VITE_API_BASE as string | undefined)?.trim();
+export const API_BASE: string | null = configuredApi ? configuredApi : import.meta.env.DEV ? 'http://localhost:8787' : null;
+
+export const NO_SERVER_MESSAGE =
+  'This build has no processing server configured, and this job needs one (phones, tablets, long tracks and the guitar lead/rhythm split always run on the server). ' +
+  'Deploy `stemsplit serve` behind HTTPS and rebuild with VITE_API_BASE set — see README › GitHub Pages.';
 
 export type Phase =
   | { readonly kind: 'idle' }
@@ -29,6 +40,13 @@ const randomKey = () => crypto.getRandomValues(new Uint8Array(16)).reduce((s, b)
 
 const CONTENT_TYPES: Readonly<Record<string, string>> = { mp3: 'audio/mpeg', wav: 'audio/wav', flac: 'audio/flac', aac: 'audio/aac', m4a: 'audio/mp4', ogg: 'audio/ogg' };
 
+export class NoServerError extends Error {
+  constructor() {
+    super(NO_SERVER_MESSAGE);
+    this.name = 'NoServerError';
+  }
+}
+
 /** `?debug=1` exposes the player for automated parity tests (scripts/e2e). */
 function exposeDebug(player: StemPlayer): void {
   if (new URLSearchParams(location.search).has('debug')) (globalThis as { __stemsplit?: unknown }).__stemsplit = { player };
@@ -43,7 +61,7 @@ export function useSeparation() {
   const [preference, setPreference] = useState<UserPreference>('auto');
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
   const playerRef = useRef<StemPlayer | null>(null);
-  const client = useRef(new ServerClient(API_BASE)).current;
+  const client = useRef(API_BASE ? new ServerClient(API_BASE) : null).current;
 
   useEffect(() => {
     void gatherCapabilities().then(setCaps);
@@ -88,6 +106,7 @@ export function useSeparation() {
   });
 
   async function runServer(f: File, request: CreateJobRequest): Promise<void> {
+    if (!client) throw new NoServerError();
     setPhase({ kind: 'uploading', fraction: 0 });
     const created = await client.create(request);
     let job = await client.upload(created, f, (fraction) => setPhase({ kind: 'uploading', fraction }));
@@ -109,7 +128,7 @@ export function useSeparation() {
   }
 
   async function flushOutbox(): Promise<void> {
-    if (!navigator.onLine) return;
+    if (!navigator.onLine || !client) return;
     for (const entry of await outbox.list()) {
       await outbox.remove(entry.id);
       await runServer(new File([entry.file], entry.request.input.filename), entry.request).catch((e: unknown) =>
@@ -143,6 +162,7 @@ export function useSeparation() {
           });
           return;
         }
+        if (!client) throw new NoServerError();
         const request = buildRequest(file);
         if (!navigator.onLine) {
           await outbox.put({ id: request.idempotencyKey, request, file, queuedAt: Date.now() });
@@ -155,7 +175,7 @@ export function useSeparation() {
         setPhase({
           kind: 'error',
           message: e instanceof Error ? e.message : String(e),
-          canRetryOnServer: e instanceof LocalAbortError || decision.target === 'device',
+          canRetryOnServer: client !== null && (e instanceof LocalAbortError || decision.target === 'device'),
         });
         // A local failure may have been a memory kill-in-progress: refresh caps (crash flag).
         void gatherCapabilities().then(setCaps);
@@ -179,5 +199,6 @@ export function useSeparation() {
     chooseFile,
     start,
     player: playerRef,
+    serverConfigured: client !== null,
   };
 }

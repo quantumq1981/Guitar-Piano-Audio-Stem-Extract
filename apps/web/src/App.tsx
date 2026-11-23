@@ -52,9 +52,14 @@ export function App() {
           </label>
         </fieldset>
 
-        {s.decision && <RoutingBanner decision={s.decision} />}
+        {s.decision && <RoutingBanner decision={s.decision} serverConfigured={s.serverConfigured} />}
 
-        <button type="button" className="primary" disabled={!s.decision || busy} onClick={() => void s.start()}>
+        <button
+          type="button"
+          className="primary"
+          disabled={!s.decision || busy || (s.decision.target === 'server' && !s.serverConfigured)}
+          onClick={() => void s.start()}
+        >
           Separate
         </button>
       </section>

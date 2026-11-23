@@ -20,7 +20,8 @@
 - GitHub Pages: `.github/workflows/pages.yml` (Source must be "GitHub Actions"). Build env `VITE_BASE=/<repo>/`, optional repo variable `VITE_API_BASE` (https).
 - All web paths must be base-relative (`import.meta.env.BASE_URL`, SW uses registration scope). Never hard-code `/`.
 - Pages cannot set headers: `public/sw.js` injects COOP/COEP (`require-corp`) and `main.tsx` reloads once for isolation.
-- Phone-only hosting: `deploy/huggingface-space/` (Docker Space, clones main, bakes model; `SPACE_HOST` → signed-URL base). PWA `create()` retries 502/503/504 while a sleeping Space wakes.
+- Phone-only hosting: `deploy/oracle/` (primary; free Ampere A1 VM). `setup.sh` is idempotent: Node 22 (sha256-verified tarball), ffmpeg, Caddy + sslip.io TLS, systemd `stemsplit` on 127.0.0.1:8787 (`serve --host`), iptables 80/443. Users paste `cloud-init.sh` (curl | bash of main). Tested in an Ubuntu 24.04 container (x64, no systemd); not yet on real OCI/arm64.
+- `deploy/huggingface-space/` needs a PAID HF plan since July 2026 (free accounts: ZeroGPU Gradio only). PWA `create()` retries 502/503/504 while a sleeping host wakes.
 - Production builds without `VITE_API_BASE` have no server (`API_BASE === null`); server-routed jobs are disabled with an explanation.
 
 ## Conventions / invariants

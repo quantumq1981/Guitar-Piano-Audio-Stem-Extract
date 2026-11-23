@@ -12,6 +12,8 @@ short_description: Guitar/piano stem separation API (htdemucs_6s, ONNX)
 
 # Stem Splitter: processing server
 
+> **Requires a paid Hugging Face plan.** Since July 2026, free accounts can't create Docker or CPU Basic Spaces. For a free server, use `deploy/oracle/` in the GitHub repo instead.
+
 This Space runs `stemsplit serve`, the Tier 1 server for the Stem Splitter PWA, built from
 https://github.com/quantumq1981/Guitar-Piano-Audio-Stem-Extract.
 

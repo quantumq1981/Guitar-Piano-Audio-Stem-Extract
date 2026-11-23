@@ -64,10 +64,20 @@ To enable the server path, run `stemsplit serve` somewhere reachable over **HTTP
 
 Why the service-worker reload: multithreaded WASM needs `crossOriginIsolated`, which normally requires COOP/COEP response headers. Pages cannot set headers, so `public/sw.js` adds them to every same-origin response. Hosts that can set headers (Cloudflare Pages, Netlify) use `public/_headers` instead.
 
-## Phone-only setup (no desktop needed)
+## Phone-only, free: separate songs with GitHub Actions
 
-Phones always process on a server, because the model needs about 2.4 GiB of RAM and a phone browser can't safely use that much. You need one always-on HTTPS server.
+No server, no extra accounts, no cost. This public repository gets free GitHub-hosted runners (4 vCPU, 16 GB RAM).
 
-**Recommended (free): Oracle Cloud Always Free.** Follow **[`deploy/oracle/README.md`](deploy/oracle/README.md)**; every step works in a phone browser. You paste a two-line startup script when creating the VM, open ports 80/443, and set `VITE_API_BASE` on GitHub.
+1. On github.com (in a phone browser), open **`inbox/`**, then **Add file → Upload files**. Pick a song and **Commit changes**.
+2. Open **Actions**, then the newest **"Separate songs"** run.
+3. When it turns green (about the song's length plus 2 minutes), scroll to **Artifacts** and download **stems - <song>** as a zip.
 
-Alternative: a Hugging Face Docker Space (`deploy/huggingface-space/`). Since July 2026, Docker and CPU Basic Spaces require a **paid Hugging Face plan**; free accounts only get ZeroGPU Gradio Spaces, which this server does not use.
+The default is Guitar focus with MP3 output. For other scopes or formats: **Actions → Separate songs → Run workflow**. See `inbox/README.md`. Uploads and stems are visible to other GitHub users because the repository is public.
+
+## Phone-only setup with your own server (optional)
+
+A server makes the PWA itself work on phones, with no GitHub steps. It needs an always-on HTTPS host:
+
+- **Oracle Cloud** ([`deploy/oracle/README.md`](deploy/oracle/README.md)). Recent accounts may show the 4-OCPU / 24 GB A1 shape as not covered by the free tier. A smaller A1 shape (1 OCPU / 6 GB) still fits the 2.4 GiB model peak, but runs slower.
+- **A Hugging Face Docker Space** (`deploy/huggingface-space/`). This needs a **paid Hugging Face plan** since July 2026.
+

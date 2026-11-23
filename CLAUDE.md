@@ -17,6 +17,8 @@
   `vite preview --port 4173`, `stemsplit serve`, then `node scripts/e2e/browser-smoke.mjs http://localhost:4173 <clip.wav> <server-vocals.wav> --server`
 
 ## Deploy
+- Phone-only, free (primary): `.github/workflows/separate.yml` — push audio to `inbox/` (or workflow_dispatch with a path) → matrix job per file
+  (`scripts/ci/pick-audio.mjs`, unit-tested) → `cli.ts separate --no-limit` → artifact `stems - <name>` (7 days). Pages workflow ignores `inbox/**`.
 - GitHub Pages: `.github/workflows/pages.yml` (Source must be "GitHub Actions"). Build env `VITE_BASE=/<repo>/`, optional repo variable `VITE_API_BASE` (https).
 - All web paths must be base-relative (`import.meta.env.BASE_URL`, SW uses registration scope). Never hard-code `/`.
 - Pages cannot set headers: `public/sw.js` injects COOP/COEP (`require-corp`) and `main.tsx` reloads once for isolation.

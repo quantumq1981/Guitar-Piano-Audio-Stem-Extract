@@ -10,6 +10,9 @@ name: Deploy PWA to GitHub Pages
 on:
   push:
     branches: [main]
+    # Song uploads trigger "Separate songs", not a site rebuild.
+    paths-ignore:
+      - 'inbox/**'
   workflow_dispatch:
 
 permissions:

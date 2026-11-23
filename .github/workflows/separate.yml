@@ -1,0 +1,123 @@
+# Separate songs on GitHub's free runners — no server, no extra accounts.
+#
+# From a phone:  github.com → this repo → inbox/ → Add file → Upload files → Commit.
+# Each uploaded audio file becomes one job; stems appear under the run's "Artifacts"
+# (Actions tab → latest "Separate songs" run → scroll down). Artifacts expire after 7 days.
+#
+# Or: Actions → Separate songs → Run workflow, and give the path of any audio file in the repo.
+name: Separate songs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'inbox/**'
+  workflow_dispatch:
+    inputs:
+      file:
+        description: "Path of an audio file in the repo (e.g. inbox/song.mp3 or a file in the root)"
+        required: true
+        type: string
+      scope:
+        description: "What to separate"
+        type: choice
+        default: guitar
+        options: [guitar, full, quick]
+      formats:
+        description: "Output formats"
+        type: choice
+        default: mp3
+        options: [mp3, wav24, "mp3,wav24", flac]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: separate-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  pick:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+      count: ${{ steps.pick.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - id: pick
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+          FILE: ${{ inputs.file }}
+        run: node scripts/ci/pick-audio.mjs --before "$BEFORE" --after "$AFTER" --file "$FILE"
+
+  separate:
+    needs: pick
+    if: needs.pick.outputs.count != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        song: ${{ fromJSON(needs.pick.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends ffmpeg
+
+      - name: Install server
+        run: npm ci --omit=dev --no-audit --no-fund --workspace @stemsplit/server --include-workspace-root=false
+
+      - name: Cache model (sha256-pinned)
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: model-htdemucs_6s-folded-a3f5050696cd
+
+      - name: Separate
+        env:
+          SONG_PATH: ${{ matrix.song.path }}
+          SONG_NAME: ${{ matrix.song.name }}
+          SCOPE: ${{ inputs.scope || 'guitar' }}
+          FORMATS: ${{ inputs.formats || 'mp3' }}
+        # --no-limit: the 6-minute cap protects the shared server, not a dedicated runner.
+        run: node packages/server/src/cli.ts separate "$SONG_PATH" --scope "$SCOPE" --format "$FORMATS" --threads 4 --no-limit -o "out/$SONG_NAME"
+
+      - name: Summary
+        env:
+          SONG_NAME: ${{ matrix.song.name }}
+        run: |
+          {
+            echo "### 🎸 $SONG_NAME"
+            echo ""
+            echo "Download **stems - $SONG_NAME** from the *Artifacts* section at the bottom of this run page (kept 7 days)."
+            echo ""
+            echo '| Stem file | Size |'
+            echo '|---|---|'
+            for f in "out/$SONG_NAME"/*.*; do
+              case "$f" in *.json) continue ;; esac
+              echo "| $(basename "$f") | $(du -h "$f" | cut -f1) |"
+            done
+            node -e 'const m=require(process.argv[1]); for (const w of m.warnings) console.log(`\n> ⚠️ ${w.message}`)' "$PWD/out/$SONG_NAME/manifest.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stems - ${{ matrix.song.name }}
+          path: out/${{ matrix.song.name }}
+          retention-days: 7
+          compression-level: 0

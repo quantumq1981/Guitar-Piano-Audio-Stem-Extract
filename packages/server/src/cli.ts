@@ -3,7 +3,7 @@
  * stemsplit CLI — same engine and models as the server and the PWA.
  *
  *   stemsplit separate <input> [-o dir] [--scope quick|full|guitar] [--format wav24,mp3] [--refine-piano] [--threads N] [--no-limit]
- *   stemsplit serve [--port 8787] [--data .data] [--threads N]
+ *   stemsplit serve [--port 8787] [--host 0.0.0.0] [--data .data] [--threads N]
  *   stemsplit submit <input> --server http://host:8787 [--scope …] [--format …] [-o dir]
  *   stemsplit models fetch | list
  *   stemsplit bench <input> [--seconds 31.2] [--threads 4]
@@ -95,7 +95,7 @@ async function cmdSeparate(argv: string[]): Promise<void> {
 async function cmdServe(argv: string[]): Promise<void> {
   const { values } = parseArgs({
     args: argv,
-    options: { port: { type: 'string' }, data: { type: 'string' }, threads: { type: 'string' }, rtf: { type: 'string' } },
+    options: { port: { type: 'string' }, host: { type: 'string' }, data: { type: 'string' }, threads: { type: 'string' }, rtf: { type: 'string' } },
   });
   const port = Number(values.port ?? process.env.PORT ?? 8787);
   // Hugging Face Spaces inject SPACE_HOST (e.g. "owner-name.hf.space"), so signed links work with zero config there.
@@ -117,7 +117,9 @@ async function cmdServe(argv: string[]): Promise<void> {
   });
   const server = createApiServer({ store, worker, primary: model, publicBaseUrl, signingSecret: secret, corsOrigin: process.env.STEMSPLIT_CORS_ORIGIN ?? '*', log });
   setInterval(() => void store.sweep().catch((e: unknown) => log(`sweep failed: ${String(e)}`)), 3600_000).unref();
-  server.listen(port, () => log(`stemsplit API listening on ${publicBaseUrl} (model ${model.id}, sha256 ${model.sha256?.slice(0, 12)}…)`));
+  // Behind a TLS reverse proxy, bind to 127.0.0.1 so the plain-HTTP port is never exposed.
+  const host = values.host ?? process.env.STEMSPLIT_HOST ?? '0.0.0.0';
+  server.listen(port, host, () => log(`stemsplit API listening on ${publicBaseUrl} (model ${model.id}, sha256 ${model.sha256?.slice(0, 12)}…)`));
 }
 
 const CONTENT_TYPES: Readonly<Record<string, string>> = {

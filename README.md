@@ -66,20 +66,8 @@ Why the service-worker reload: multithreaded WASM needs `crossOriginIsolated`, w
 
 ## Phone-only setup (no desktop needed)
 
-Phones always process on a server, because the model needs about 2.4 GiB of RAM and a phone browser can't safely use that much. The simplest always-on, free, HTTPS server is a **Hugging Face Space**, and every step below works in a phone browser.
+Phones always process on a server, because the model needs about 2.4 GiB of RAM and a phone browser can't safely use that much. You need one always-on HTTPS server.
 
-1. **Create the Space.** On huggingface.co: **New → Space**, choose SDK **Docker → Blank** and hardware **CPU basic (free)**, and make it **Public**. The PWA calls it directly, and private Spaces would need a login.
-2. **Add the files.** In the Space's **Files** tab, add `README.md` and `Dockerfile` with the contents of `deploy/huggingface-space/` from this repo, replacing the default files. The build takes about 5–10 minutes.
-3. **Configure the Space.** Under the Space's **Settings**:
-   - **Secret** `STEMSPLIT_SIGNING_SECRET`: any long random string. It signs the download links.
-   - **Variable** `STEMSPLIT_CORS_ORIGIN`: `https://quantumq1981.github.io`
-4. **Check it.** Open `https://<hf-user>-<space-name>.hf.space/v1/health`. It should return `{"ok":true,...}`.
-5. **Point the PWA at it.** On GitHub: **Settings → Secrets and variables → Actions → Variables → New**. Set `VITE_API_BASE` to `https://<hf-user>-<space-name>.hf.space`, then run **Actions → Deploy PWA to GitHub Pages → Run workflow**.
-6. **Install the app.** On the phone, open `https://quantumq1981.github.io/Guitar-Piano-Audio-Stem-Extract/` and use **Share → Add to Home Screen**.
+**Recommended (free): Oracle Cloud Always Free.** Follow **[`deploy/oracle/README.md`](deploy/oracle/README.md)**; every step works in a phone browser. You paste a two-line startup script when creating the VM, open ports 80/443, and set `VITE_API_BASE` on GitHub.
 
-What to expect on the free tier:
-
-- **Speed:** about 1–1.3× the track length (2 vCPU), so a 4-minute song takes about 5 minutes.
-- **Sleeping:** the Space sleeps after a period without traffic. The first job afterwards shows "Waking the processing server…" for a minute or two; the app retries automatically.
-- **Storage:** job files live in the container's `/tmp`, so a Space restart deletes results early.
-- **Access control:** the API has no authentication yet. Anyone who finds the Space URL can submit jobs, which costs you nothing on the free tier but is shared capacity. Paid "CPU upgrade" hardware (8 vCPU) runs about 4× faster.
+Alternative: a Hugging Face Docker Space (`deploy/huggingface-space/`). Since July 2026, Docker and CPU Basic Spaces require a **paid Hugging Face plan**; free accounts only get ZeroGPU Gradio Spaces, which this server does not use.

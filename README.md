@@ -39,3 +39,27 @@ VITE_API_BASE=http://localhost:8787 npm run dev:web
 | Guitar focus | + lead / rhythm guitar split | server only |
 
 The lead/rhythm split is currently a labelled DSP heuristic (`spatial-similarity-v0`), because no openly licensed ML model exists yet. Piano refinement (Banquet) is stubbed for licensing reasons. See the architecture doc §0.
+
+## GitHub Pages
+
+Pages serves the **built** app from `apps/web/dist`, not the repository files. Before this is set up, the Pages URL just shows this README.
+
+1. **Settings → Pages → Build and deployment → Source: "GitHub Actions"**. This is a one-time switch from "Deploy from a branch".
+2. Push to `main`, or run **Actions → "Deploy PWA to GitHub Pages" → Run workflow**.
+3. Open `https://<owner>.github.io/<repo>/`. On first load the service worker installs and reloads the page once to turn on cross-origin isolation (see below).
+
+What works on Pages alone:
+
+| Device | Quick / Full, ≤ 90 s (WebGPU) or ≤ 30 s (WASM) | Guitar focus, longer tracks, piano refine |
+|---|---|---|
+| Desktop Chrome / Edge | ✅ on-device (downloads the 285 MB model from Hugging Face once, then caches it) | needs a server |
+| Phone / tablet | needs a server (by design: the model needs about 2.4 GiB of RAM) | needs a server |
+
+To enable the server path, run `stemsplit serve` somewhere reachable over **HTTPS**. Then set the repository variable **`VITE_API_BASE`** (Settings → Secrets and variables → Actions → Variables) to that URL and re-run the workflow.
+
+- **HTTPS is required:** an https page cannot call an http API (mixed content).
+- **For quick testing**, tunnel a local server, for example `cloudflared tunnel --url http://localhost:8787`.
+- **CORS:** the server allows all origins by default. Set `STEMSPLIT_CORS_ORIGIN=https://<owner>.github.io` to lock it down.
+- **Signed links:** set `STEMSPLIT_PUBLIC_URL` to the tunnel URL so download links point at it.
+
+Why the service-worker reload: multithreaded WASM needs `crossOriginIsolated`, which normally requires COOP/COEP response headers. Pages cannot set headers, so `public/sw.js` adds them to every same-origin response. Hosts that can set headers (Cloudflare Pages, Netlify) use `public/_headers` instead.

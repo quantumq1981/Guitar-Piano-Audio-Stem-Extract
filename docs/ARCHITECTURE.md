@@ -165,7 +165,7 @@ How the measured numbers break down:
 | Offline server jobs | IndexedDB `stemsplit/outbox` | flushed on Background Sync (`flush-outbox`), `online`, or startup | idempotency key makes retries safe |
 | Intermediate audio | memory today (desktop only) | — | OPFS streaming is the next step for longer device clips |
 
-Cross-origin isolation uses `COOP: same-origin` and `COEP: credentialless`, set in `vite.config.ts` and `public/_headers`. Safari lacks `credentialless`, which only matters for desktop Safari without WebGPU (it falls back to the server).
+Cross-origin isolation uses `COOP: same-origin` and `COEP: require-corp`. Safari does not implement `credentialless`, and every cross-origin fetch we make (the model and the API) is CORS-mode, which `require-corp` allows. Hosts that can set headers use `vite.config.ts` and `public/_headers`. On static hosts that cannot (GitHub Pages), `public/sw.js` injects the headers into every same-origin response, and `main.tsx` reloads once after the service worker takes control. This was verified on a header-less static server under a `/<repo>/` subpath: `crossOriginIsolated` became true and an on-device WASM run completed **[M]**. All service-worker paths are relative to the registration scope.
 
 ---
 

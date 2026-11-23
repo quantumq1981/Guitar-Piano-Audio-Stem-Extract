@@ -1,7 +1,7 @@
 # Cloudflare Pages / Netlify-style headers for production hosting.
 /*
   Cross-Origin-Opener-Policy: same-origin
-  Cross-Origin-Embedder-Policy: credentialless
+  Cross-Origin-Embedder-Policy: require-corp
   X-Content-Type-Options: nosniff
 /sw.js
   Cache-Control: no-cache

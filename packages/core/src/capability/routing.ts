@@ -101,7 +101,9 @@ export function decideRoute(req: RouteRequest): RouteDecision {
       model,
       ep,
       inputFrames: Math.ceil(input.durationSec * model.io.sampleRate),
-      streamInput: true,
+      streamInput: false,
+      inputCopies: 2,
+      retainedOutputStems: model.io.stems.length,
     });
     const ceiling = PLATFORM_CEILINGS[platformClass(caps, ep)];
     if (memory.projectedPeakBytes > ceiling.abortAboveBytes.value) blockers.push('memory_projection_exceeds_ceiling');

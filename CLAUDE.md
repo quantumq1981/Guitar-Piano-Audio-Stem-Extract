@@ -53,7 +53,9 @@
 Mobile Stage IV (stacked on PR #12, experimental): exact rewrites + two-level reductions + external data. WASM touched memory
 813 -> 475 MiB, Chromium peak PSS 1203/1158 -> 911/930 MiB, session-create heap 431 -> 147 MiB. WASM-vs-native parity fixed
 (music fixture >= 61.9 dB per stem vs source, >= 84 dB same graph; owner's songs >= 58.2 / >= 75.7 dB). WebGPU sessions now
-initialise in Chromium with static shapes (inference needs shader-f16). Next: physical iOS/Android, then worker integration.
+initialise in Chromium with static shapes (inference needs shader-f16). **Physical iPhone (Safari 27.2) passed** the hosted test:
+session 2.9-3.9 s, 11.9-12.9 s per 7.8 s window (1 thread), WASM heap 616 MiB / touched 510 MiB, repeats bit-identical.
+Next: full-song on-device separation with bounded stem storage, then threads, other devices.
 
 ## Status (2026-11-23)
 Done: core + tests (67), server pipeline/API/CLI verified on real tracks (RTF ≈ 0.63, 4 vCPU), PWA builds and runs

@@ -1,7 +1,7 @@
 import { chromium } from 'playwright';
 import { createServer } from 'node:http';
 import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 
 const validate = process.env.ORT_VALIDATE === '1';
 const provider = process.env.ORT_PROVIDER || 'webgpu';
@@ -10,8 +10,17 @@ const workspaceRuntime = 'apps/web/node_modules/onnxruntime-web';
 const runtime = resolve(pinned ? 'ort-compat/node_modules/onnxruntime-web' :
   existsSync(workspaceRuntime) ? workspaceRuntime : 'node_modules/onnxruntime-web');
 const { version } = JSON.parse(readFileSync(resolve(runtime, 'package.json'), 'utf8'));
+// ORT_MODEL selects the graph (default candidate.onnx). ORT_MODEL_DATA names its external-data file, which
+// must sit next to it under the name recorded in the graph.
+const modelFile = basename(process.env.ORT_MODEL || 'candidate.onnx');
+const dataFile = process.env.ORT_MODEL_DATA ? basename(process.env.ORT_MODEL_DATA) : '';
+// ORT_FIXTURE selects the validation fixture prefix: <prefix>-input.bin (the mix), <prefix>-source.bin (native
+// CPU output of the source model) and <prefix>-candidate.bin (native CPU output of the model under test).
+const fixture = basename(process.env.ORT_FIXTURE || 'reference');
+const runCount = Math.max(1, Number(process.env.ORT_RUNS || (validate ? 3 : 1)));
 const fixtureFiles = new Set([
-  '/candidate.onnx', '/reference-input.bin', '/reference-source.bin', '/reference-candidate.bin',
+  '/' + modelFile, ...(dataFile ? ['/' + dataFile] : []),
+  ...['input', 'source', 'candidate'].map(kind => `/${fixture}-${kind}.bin`),
 ]);
 
 const server = createServer((req, res) => {
@@ -77,8 +86,12 @@ function sampleMemory() {
   measurement.processesSeen += descendants.length;
 }
 
-function setPhase(next) {
+// The page reports its WebAssembly heap size (bytes of every WebAssembly.Memory it created) when it enters a
+// phase. A WASM heap never shrinks, so the size reported on entering the next phase is the previous phase's
+// maximum. Unlike sampled PSS this is exact and independent of the browser's process model.
+function setPhase(next, wasmHeapBytes) {
   sampleMemory();
+  if (phase && memory[phase] && Number.isFinite(wasmHeapBytes)) memory[phase].wasmHeapMiB = +(wasmHeapBytes / 2 ** 20).toFixed(1);
   phase = next;
   memory[phase] = { peakKiB: null, samples: 0, processReads: 0, processesSeen: 0 };
   sampleMemory();
@@ -86,27 +99,40 @@ function setPhase(next) {
 
 let browser;
 let timer;
-console.log(JSON.stringify({ event: 'runtime', provider, pinned, version, wasmThreads: 1 }));
+console.log(JSON.stringify({ event: 'runtime', provider, pinned, version, wasmThreads: 1, model: modelFile, externalData: dataFile || null, fixture: validate ? fixture : null, runs: runCount }));
 try {
   browser = await chromium.launch({
     args: ['--enable-unsafe-webgpu', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
   });
   const page = await browser.newPage();
+  await page.addInitScript(() => {
+    const created = [];
+    const NativeMemory = WebAssembly.Memory;
+    WebAssembly.Memory = function Memory(descriptor) {
+      const memory = new NativeMemory(descriptor);
+      created.push(memory);
+      return memory;
+    };
+    WebAssembly.Memory.prototype = NativeMemory.prototype;
+    window.wasmHeapBytes = () => created.reduce((sum, memory) => sum + memory.buffer.byteLength, 0);
+  });
   page.on('console', message => console.log(message.text()));
   await page.exposeFunction('markBenchmarkPhase', setPhase);
   await page.goto('http://127.0.0.1:' + server.address().port);
   setPhase('baseline');
   timer = setInterval(sampleMemory, 250);
 
-  const result = await page.evaluate(async ({ provider, validate }) => {
+  const result = await page.evaluate(async ({ provider, validate, modelFile, dataFile, fixture, runCount }) => {
+    const mark = name => window.markBenchmarkPhase(name, window.wasmHeapBytes());
     if (provider === 'webgpu' && (!navigator.gpu || !await navigator.gpu.requestAdapter())) {
       throw Error('No WebGPU adapter in CI');
     }
     const ort = await import(provider === 'wasm' ? '/ort.wasm.min.mjs' : '/ort.webgpu.bundle.min.mjs');
     ort.env.wasm.numThreads = 1;
-    await window.markBenchmarkPhase('session-create');
+    await mark('session-create');
     const start = performance.now();
-    const session = await ort.InferenceSession.create('/candidate.onnx', {
+    const session = await ort.InferenceSession.create('/' + modelFile, {
+      ...(dataFile ? { externalData: [{ path: dataFile, data: '/' + dataFile }] } : {}),
       executionProviders: [provider],
       graphOptimizationLevel: 'disabled',
       enableMemPattern: false,
@@ -154,16 +180,16 @@ try {
     }
 
     try {
-      await window.markBenchmarkPhase('fixture');
+      await mark('fixture');
       const loadFixture = async name => {
         const response = await fetch(name);
         if (!response.ok) throw Error('Reference HTTP ' + response.status + ' for ' + name);
         return new Float32Array(await response.arrayBuffer());
       };
       const [mix, nativeSource, nativeCandidate] = validate ? await Promise.all([
-        loadFixture('/reference-input.bin'),
-        loadFixture('/reference-source.bin'),
-        loadFixture('/reference-candidate.bin'),
+        loadFixture(`/${fixture}-input.bin`),
+        loadFixture(`/${fixture}-source.bin`),
+        loadFixture(`/${fixture}-candidate.bin`),
       ]) : [Float32Array.from({ length: samplesPerStem }, (_, i) =>
         0.05 * Math.sin(2 * Math.PI * (i < frames ? 440 : 660) * i / 44100))];
       if (mix.length !== samplesPerStem || !mix.every(Number.isFinite) ||
@@ -174,8 +200,8 @@ try {
 
       const runs = [];
       let firstOutput;
-      for (let run = 1; run <= (validate ? 3 : 1); run++) {
-        await window.markBenchmarkPhase('inference-' + run);
+      for (let run = 1; run <= runCount; run++) {
+        await mark('inference-' + run);
         const input = new ort.Tensor('float32', mix, [1, 2, frames]);
         let output;
         const inferenceStart = performance.now();
@@ -190,7 +216,7 @@ try {
           }
           runs.push({ run, seconds });
           if (validate) {
-            await window.markBenchmarkPhase('compare-' + run);
+            await mark('compare-' + run);
             const comparisons = {
               nativeSourceToBrowserCandidate: compare(nativeSource, actual),
               nativeCandidateToBrowserCandidate: compare(nativeCandidate, actual),
@@ -205,18 +231,19 @@ try {
           if (output) Object.values(output).forEach(tensor => tensor.dispose());
         }
       }
-      return { pass: !validate || runs.every(run => run.pass), initSeconds, runs };
+      // A validation that ran fewer inferences than requested must not pass.
+      return { pass: runs.length === runCount && (!validate || runs.every(run => run.pass)), initSeconds, runs };
     } finally {
-      await window.markBenchmarkPhase('session-cleanup');
+      await mark('session-cleanup');
       await session.release();
     }
-  }, { provider, validate });
-  console.log(JSON.stringify({ event: 'result', provider, pinned, version, ...result }));
+  }, { provider, validate, modelFile, dataFile, fixture, runCount });
+  console.log(JSON.stringify({ event: 'result', provider, pinned, version, model: modelFile, ...result }));
   if (!result.pass) process.exitCode = 1;
 } finally {
   try {
     if (browser) {
-      setPhase('browser-cleanup');
+      setPhase('browser-cleanup', await browser.contexts()[0]?.pages()[0]?.evaluate(() => window.wasmHeapBytes()).catch(() => NaN));
       await browser.close();
     }
   } finally {

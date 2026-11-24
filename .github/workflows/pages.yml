@@ -51,6 +51,18 @@ jobs:
           VITE_API_BASE: ${{ vars.VITE_API_BASE }}
         run: npm run build:web
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Generate verified experimental model
+        run: |
+          pip install numpy onnx onnxruntime
+          curl --fail --location --retry 3 -o /tmp/source.onnx https://huggingface.co/StemSplitio/htdemucs-6s-onnx/resolve/main/htdemucs_6s_fp16weights.onnx
+          mkdir -p apps/web/dist/models
+          python scripts/fold_webgpu.py /tmp/source.onnx apps/web/dist/models/mobile.onnx
+          echo '1333aa4a748126703b2824286c6a38dd0774491f7b2ad9fb802eba190191946f  apps/web/dist/models/mobile.onnx' | sha256sum --check
+          test "$(stat -c%s apps/web/dist/models/mobile.onnx)" = 143359115
+
       - name: Disable Jekyll
         run: touch apps/web/dist/.nojekyll
 

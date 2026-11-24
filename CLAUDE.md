@@ -8,6 +8,10 @@
   node:http API, CLI (`src/cli.ts`). `scripts/` holds measurement tools (mem-probe, compare-models, segment-consistency).
 - `apps/web` — Tier 2 React PWA: capability probe, inference worker (onnxruntime-web), server client, stem player, SW.
 - `docs/ARCHITECTURE.md` (design + measured numbers), `docs/API.md` (contract). `scripts/fold_webgpu.py`, `scripts/e2e/`.
+- Mobile inference research (experimental, not production): `docs/MOBILE-INFERENCE-DEVELOPMENT.md` is the handoff. Read it first.
+  `scripts/mobile_graph.py` (PR #12 folding), `scripts/mobile_memory.py` (Stage IV exact memory passes, two-level reductions,
+  live-memory simulator; tests `python -m unittest scripts/test_mobile_memory.py`), `scripts/mobile_fixture.py` (licence-free
+  six-stem music fixture), `scripts/mobile-webgpu-check.mjs` (Chromium WASM/WebGPU gate), `.github/workflows/mobile-graph.yml`.
 
 ## Commands
 - `npm test` (vitest, all workspaces) · `npm run typecheck` (tsc 7 strict, per package) · `npm run build:web`
@@ -33,8 +37,20 @@
 - Every job status change goes through `transition()`; never assign `status` directly.
 - Tag numbers in docs as [M]easured / [V]endor / [E]stimate. Do not present estimates as facts.
 - ORT sessions: `enableCpuMemArena: false`, `enableMemPattern: false` (measured 2.4 GiB vs 4.7 GiB peak).
+- Mobile graphs (Stage IV, measured): onnxruntime-web sums long float32 reductions less accurately than native (77-81 vs 101-107 dB
+  vs float64); any graph run in WASM needs two-level ReduceMean/GroupNorm (`--accurate-reductions`) to meet the 40 dB contract.
+  Gate per-stem parity on the music fixture: near-silent stems of tone/noise fixtures fail even native-vs-native rewrites.
+- ORT plans same-size buffer reuse whenever shapes are static and holds dead encoder buffers for the decoder (+1.3 GiB with static
+  shapes, +183 MiB even dynamic). Web/Node bindings cannot disable it: keep `opaque_shapes`, graph optimisation disabled, and never
+  ship `--static-shapes` for WASM. Measure WASM memory as touched pages, not `buffer.byteLength` (geometric growth slack).
 - Inference worker must not install `onmessage` when `self.name` starts with `em-pthread` (ORT thread re-entry deadlock).
 - The MP3s in the repo root are the owner's test material; never commit derived stems (`out/` is gitignored).
+
+## Status (2026-11-24)
+Mobile Stage IV (stacked on PR #12, experimental): exact rewrites + two-level reductions + external data. WASM touched memory
+813 -> 475 MiB, Chromium peak PSS 1203/1158 -> 911/930 MiB, session-create heap 431 -> 147 MiB. WASM-vs-native parity fixed
+(music fixture >= 61.9 dB per stem vs source, >= 84 dB same graph; owner's songs >= 58.2 / >= 75.7 dB). WebGPU sessions now
+initialise in Chromium with static shapes (inference needs shader-f16). Next: physical iOS/Android, then worker integration.
 
 ## Status (2026-11-23)
 Done: core + tests (67), server pipeline/API/CLI verified on real tracks (RTF ≈ 0.63, 4 vCPU), PWA builds and runs

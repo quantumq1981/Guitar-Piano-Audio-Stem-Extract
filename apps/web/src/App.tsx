@@ -1,3 +1,5 @@
+import { useState } from 'react';
+import { MobileBenchmark } from './components/MobileBenchmark.tsx';
 import type { SeparationScope } from '@stemsplit/core';
 import { SERVER_LIMITS } from '@stemsplit/core';
 import { GpuDiagnostics } from './components/GpuDiagnostics.tsx';
@@ -13,7 +15,8 @@ const SCOPES: ReadonlyArray<{ id: SeparationScope; label: string; detail: string
 
 export function App() {
   const s = useSeparation();
-  const busy = ['decoding', 'model-download', 'local', 'waking', 'uploading', 'server'].includes(s.phase.kind);
+  const [benchmarkBusy, setBenchmarkBusy] = useState(false);
+  const busy = benchmarkBusy || ['decoding', 'model-download', 'local', 'waking', 'uploading', 'server'].includes(s.phase.kind);
 
   return (
     <main className="app">
@@ -66,6 +69,7 @@ export function App() {
       </section>
 
       <GpuDiagnostics disabled={busy} />
+      <MobileBenchmark disabled={busy} onBusy={setBenchmarkBusy} />
       {renderStatus()}
 
       {s.phase.kind === 'ready' && s.player.current && (

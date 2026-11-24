@@ -129,8 +129,29 @@ When ORT's planner can size two tensors at load time and they are equal, it keep
 
 With the ISTFT folded and `--static-shapes`, **WebGPU session creation succeeds in Chromium for both 1.23.2 and 1.31.1** (2.7 / 3.4 s), for the first time in this project. Inference then stops on SwiftShader only because it lacks `shader-f16`, which the fp16→fp32 weight Casts need. The physical iPhone reported shader-f16 in PR 6. With dynamic shapes, partitioning still fails, now at `/real_istft/Slice_2041` (initializer data, shape-derived `ends`). Static shapes are incompatible with the WASM memory goal (reuse trap), so WebGPU needs its own graph variant, GPU-memory measurement and a physical-device test.
 
+## Stage IV — device test on GitHub Pages
+
+A physical-iPhone report from 2026-11-24 (screenshot: "Downloading verified model (143 MB)… Integrity PASS; initializing WebGPU session (basic graph optimization)…", then the tab was closed and the page showed "Previous test was interrupted") ran the **older WebGPU experiment from PR 10**, not Stage IV. Pages then hosted only `models/mobile.onnx`, and the benchmark had no Stage IV path. It reproduces the Stage II PR 10 failure (WebGPU, basic optimisation, which re-expands fp16 weights) and says nothing about the Stage IV candidate.
+
+The Pages build now regenerates the Stage IV candidate from the verified `mobile.onnx`: `scripts/mobile_graph.py`, then `scripts/mobile_memory.py --external-data --accurate-reductions --no-verify`. It fails the deploy unless both files match the SHA-256 pins in `packages/core/src/models/mobile-experimental.ts` (`MOBILE_STAGE4_CANDIDATE`). The rebuild is deterministic: CI (Python 3.11) and a local rebuild (Python 3.13) produce the same bytes. It serves `models/candidate-memory.onnx` + `.data` (130 MB). The experimental card has **Stage IV: load + 1 window** and **Stage IV: load + 3 windows**. They run `apps/web/src/inference/mobile-stage4.worker.ts`:
+- Plain WASM build (`onnxruntime-web/wasm`, not JSEP/asyncify), one thread, graph optimisation disabled, both files verified.
+- Shared WebAssembly memory capped at 1 GiB, then 768 MiB if that reservation fails (`capWasmMemoryDescriptor`); ORT asks for 4 GiB.
+- Screen wake lock while the test runs.
+- Every stage is logged with the WASM heap (reserved and touched) to the crash-marker log.
+
+Real app in headless Chromium (Vite preview, 4 vCPU), "load + 3 windows" **[M]**:
+
+| Stage | WASM heap (touched) | Time |
+|---|---:|---:|
+| Session ready | 172 MiB (138) | 8.0 s |
+| Window 1 | 515 MiB (479) | 26.7 s |
+| Window 2 | 515 MiB (479) | 25.3 s, bit-identical to window 1 |
+| Window 3 | 616 MiB (510) | 24.5 s, bit-identical to window 1 |
+
+What to record from a device run: the full log text (environment line with the Safari version, every heap line, the last stage before any interruption), the model and iOS version, and whether other tabs were open. If it fails at "Creating session" with a RangeError, the memory cap ladder was refused. If the tab closes during a window, the last heap line is the best available estimate of the kill threshold.
+
 ## Stage IV — remaining work (in order)
-1. Physical devices with the Stage IV candidate: iOS/iPadOS Safari session create, then one window, then repeated windows. Read `[stems …]`-style labels from the start: record ORT version, Safari version and touched heap. The WASM path should stay on the pinned 1.23.2 plain build, because of microsoft/onnxruntime#33426 (JSC on Safari < 17.5; see Tab Translator Pro `stem-model-core.js`).
+1. Physical devices with the Stage IV candidate (hosted test above): iOS/iPadOS Safari session create, then one window, then repeated windows. Read `[stems …]`-style labels from the start: record ORT version, Safari version and touched heap. The WASM path should stay on the pinned 1.23.2 plain build, because of microsoft/onnxruntime#33426 (JSC on Safari < 17.5; see Tab Translator Pro `stem-model-core.js`).
 2. App integration behind the experimental benchmark (Stage III item 3). The worker loads graph + `.data` with `externalData`, each file SHA-256-verified and cached, and drops its reference to the data buffer after `create()`. Use one thread, graph optimisation disabled, a verified cache, transferable buffers, cancellation, crash marker and worker termination. The registry needs two pinned hashes (graph + data).
 3. Further exact memory cuts. Chunk the frequency-branch DConv along its 512-row batch (every op there is per row; replace constant batch dims in Reshape targets with 0). Run the ISTFT tail per source (batch 12 → 2). Both remove 63 MiB tensors, the new peak.
 4. Full tracks: one session reused across windows (touched memory is flat over 3–4 runs); OPFS/bounded streaming; recycle the worker if the heap creeps on device.

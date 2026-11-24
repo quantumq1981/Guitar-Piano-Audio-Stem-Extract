@@ -66,3 +66,37 @@ export function wavStemSink(stems: number, totalFrames: number, format: WavForma
     },
   };
 }
+
+/**
+ * What a stem file found in storage holds, judged from its first 44 bytes and its size. `wavStemSink` writes the
+ * header (sized for the whole song) with the first block, then PCM in order, so a run that was cancelled or killed
+ * leaves a file shorter than its header promises.
+ *  - `complete`: every frame the header promises is present.
+ *  - `partial`: the run stopped before the end (includes a file too short to hold a header).
+ *  - `invalid`: not a canonical 44-byte-header PCM/float WAV, or longer than its header says.
+ */
+export type StoredStemState = 'complete' | 'partial' | 'invalid';
+
+export interface StoredStem {
+  readonly state: StoredStemState;
+  /** Frames the header promises (0 when the header is missing or invalid). */
+  readonly frames: number;
+}
+
+export function storedStem(header: Uint8Array, fileSize: number): StoredStem {
+  if (!Number.isSafeInteger(fileSize) || fileSize < 0) throw new RangeError(`Invalid file size ${fileSize}`);
+  if (fileSize < WAV_HEADER_BYTES || header.length < WAV_HEADER_BYTES) {
+    return { state: fileSize < WAV_HEADER_BYTES ? 'partial' : 'invalid', frames: 0 };
+  }
+  const v = new DataView(header.buffer, header.byteOffset, WAV_HEADER_BYTES);
+  const tag = (at: number) => String.fromCharCode(v.getUint8(at), v.getUint8(at + 1), v.getUint8(at + 2), v.getUint8(at + 3));
+  const blockAlign = v.getUint16(32, true);
+  const dataBytes = v.getUint32(40, true);
+  const canonical = tag(0) === 'RIFF' && tag(8) === 'WAVE' && tag(12) === 'fmt ' && tag(36) === 'data' &&
+    v.getUint32(16, true) === 16 && v.getUint32(4, true) === 36 + dataBytes &&
+    blockAlign > 0 && dataBytes % blockAlign === 0;
+  if (!canonical) return { state: 'invalid', frames: 0 };
+  const frames = dataBytes / blockAlign;
+  const expected = WAV_HEADER_BYTES + dataBytes;
+  return { state: fileSize === expected ? 'complete' : fileSize < expected ? 'partial' : 'invalid', frames };
+}

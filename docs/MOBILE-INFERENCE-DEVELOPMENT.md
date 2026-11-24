@@ -172,7 +172,12 @@ The owner ran the hosted test on an iPhone over 5G (Pages deploy of PR #14). Bot
 3. Transfers the planar channels to `mobile-stage4.worker.ts`.
 4. Runs the shared core engine (`separate()`, 25 % overlap-add) with the Stage IV session.
 5. Streams every finalised block into six **24-bit WAV files in OPFS** through sync access handles. `wavStemSink` in `packages/core/src/codec/stem-wav-sink.ts` (headless-tested) writes each header with the first block and checks contiguity and completeness.
-6. The page shows an `<audio>` player and a download link per stem. Each reads the disk-backed OPFS `File`, so the stems are never copied into memory. "Delete stems from this device" removes them; the next run replaces them anyway.
+6. The page shows an `<audio>` player and a download link per stem. Each reads the disk-backed OPFS `File`, so the stems are never copied into memory. "Delete stems from this device" removes them.
+7. **Leftovers are found and freed.** The page scans the stem directory on load and after every run. `storedStem` (core, headless-tested) reads each file's 44-byte header and size:
+   - six complete, equal-length files are shown as playable stems, including after a reload;
+   - anything else is listed as "unfinished stems from a stopped run", with its size and the Delete button. This covers a run that was cancelled, hidden or killed with the tab.
+
+   A new song frees the old stems **before** the storage-quota check. Before this fix (Codex review on #16), a stopped run's files had no Delete control, and the quota check counted them. On a nearly full phone every retry failed.
 
 What the run holds in memory does not grow with song length, apart from the decoded input (≈ 85 MB for 4 min stereo):
 - the WASM heap;
@@ -189,6 +194,7 @@ Real app in headless Chromium (iPhone user agent, 390 px), 45 s of *D'Angelo –
 | Browser WAV24 vs native onnxruntime-node, same engine and model, float | drums 93.8 · bass 95.0 · other 85.6 · vocals 94.8 · guitar 89.7 · piano 89.2 dB |
 | Same with 16-bit stems (first version) | 44.6–73.6 dB vs float; the quiet "other" stem (−31.7 dB re mix) was limited by 16-bit quantisation, not the model (63.3 dB against native quantised to 16-bit) |
 | 5 s mono file | 1 window, six stems, delete clears OPFS |
+| Run reloaded after window 1, then a retry with a simulated quota that fits the new stems only if the old ones are freed (1.4 MB free otherwise) | Before the fix: 9 MB of partial stems and no Delete control; the retry failed with "stems need 8 MB, 1 MB available". After: "Unfinished stems … (9 MB)" with Delete; the retry logged "Removed the previous stems (9 MB)" and finished. The finished stems were still playable after a reload, and Delete emptied OPFS. `navigator.storage.estimate()` reflected the removal immediately in Chromium. |
 
 A capability gotcha that a first version shipped: `createSyncAccessHandle` exists only in dedicated workers, so checking `FileSystemFileHandle.prototype` on the page rejects every browser. The page checks only `navigator.storage.getDirectory`, and the worker checks for sync access.
 

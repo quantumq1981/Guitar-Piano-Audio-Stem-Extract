@@ -177,7 +177,7 @@ async function runSong(left: Float32Array, right: Float32Array): Promise<void> {
     await session.release();
   }
   report(`Session released · ${heap()}`);
-  post({ done: true, message: 'Song separation complete', files });
+  post({ done: true, message: 'Song separation complete' });
 }
 
 if (!self.name.startsWith('em-pthread')) {

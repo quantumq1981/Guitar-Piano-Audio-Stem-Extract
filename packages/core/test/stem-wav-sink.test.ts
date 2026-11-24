@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FinalizedBlock, ModelIO, SegmentRunner, StemName, WavFormat } from '../src/index.ts';
-import { WAV_HEADER_BYTES, decodeWav, encodeWav, memorySource, separate, wavStemSink } from '../src/index.ts';
+import { WAV_HEADER_BYTES, decodeWav, encodeWav, encodeWavHeader, memorySource, separate, storedStem, wavStemSink } from '../src/index.ts';
 import { noise } from './helpers.ts';
 
 const STEMS: StemName[] = ['drums', 'bass', 'other', 'vocals', 'guitar', 'piano'];
@@ -108,5 +108,54 @@ describe('wavStemSink', () => {
     await partial.write(one(0, 4));
     expect(() => partial.finish()).toThrow(/Only 4 of 10/);
     expect(() => wavStemSink(0, 10, pcm16, () => {})).toThrow(RangeError);
+  });
+});
+
+describe('storedStem', () => {
+  const pcm24: WavFormat = { sampleRate: 44_100, channels: 2, sampleFormat: 'pcm24' };
+
+  it('tells a finished stem from one a cancelled or killed run left behind', async () => {
+    const store = memoryFiles(1);
+    const sink = wavStemSink(1, 10, pcm24, store.port);
+    const block = (start: number, frames: number): FinalizedBlock => ({
+      start, frames, planes: [[new Float32Array(frames).fill(0.25), new Float32Array(frames).fill(-0.25)]],
+    });
+    await sink.write(block(0, 4));
+    const cut = store.files[0]!;
+    expect(storedStem(cut.subarray(0, WAV_HEADER_BYTES), cut.length)).toEqual({ state: 'partial', frames: 10 });
+    await sink.write(block(4, 6));
+    sink.finish();
+    const done = store.files[0]!;
+    expect(done.length).toBe(WAV_HEADER_BYTES + 10 * 6);
+    expect(storedStem(done.subarray(0, WAV_HEADER_BYTES), done.length)).toEqual({ state: 'complete', frames: 10 });
+  });
+
+  it('accepts a whole file as the header argument and an empty song', () => {
+    const file = encodeWav([new Float32Array(3), new Float32Array(3)], pcm16);
+    expect(storedStem(file, file.length)).toEqual({ state: 'complete', frames: 3 });
+    expect(storedStem(encodeWavHeader(0, pcm24), WAV_HEADER_BYTES)).toEqual({ state: 'complete', frames: 0 });
+  });
+
+  it('calls a file too short for a header partial, and anything else that is not this layout invalid', () => {
+    expect(storedStem(new Uint8Array(0), 0)).toEqual({ state: 'partial', frames: 0 });
+    expect(storedStem(new Uint8Array(20), 20)).toEqual({ state: 'partial', frames: 0 });
+    const header = encodeWavHeader(10, pcm24);
+    expect(storedStem(header.subarray(0, 20), 1000)).toEqual({ state: 'invalid', frames: 0 });
+    expect(storedStem(header, WAV_HEADER_BYTES + 61).state).toBe('invalid'); // longer than promised
+    const corrupt = (at: number, value: number) => {
+      const h = header.slice();
+      h[at] = value;
+      return storedStem(h, WAV_HEADER_BYTES + 60).state;
+    };
+    expect(corrupt(0, 0)).toBe('invalid'); // not RIFF
+    expect(corrupt(8, 0)).toBe('invalid'); // not WAVE
+    expect(corrupt(36, 0)).toBe('invalid'); // no data chunk at 36
+    expect(corrupt(4, 0)).toBe('invalid'); // RIFF size disagrees with the data size
+    expect(corrupt(32, 0)).toBe('invalid'); // block align 0
+    const ragged = header.slice(); // consistent RIFF and data sizes, but not a whole number of 6-byte frames
+    new DataView(ragged.buffer).setUint32(4, 36 + 61, true);
+    new DataView(ragged.buffer).setUint32(40, 61, true);
+    expect(storedStem(ragged, WAV_HEADER_BYTES + 61).state).toBe('invalid');
+    expect(() => storedStem(header, -1)).toThrow(RangeError);
   });
 });

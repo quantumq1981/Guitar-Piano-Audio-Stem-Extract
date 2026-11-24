@@ -2,32 +2,204 @@ name: Mobile graph engineering
 on:
   workflow_dispatch:
   pull_request:
-    branches: [main]
+    branches: [main, 'mobile/**']
     paths:
       - 'scripts/mobile_graph.py'
+      - 'scripts/mobile_memory.py'
+      - 'scripts/mobile_fixture.py'
+      - 'scripts/test_mobile_memory.py'
+      - 'scripts/mobile-webgpu-check.mjs'
       - '.github/workflows/mobile-graph.yml'
 permissions:
   contents: read
 jobs:
   graph:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install numpy onnx onnxruntime
+      - run: pip install numpy==2.4.6 onnx==1.23.2 onnxruntime==1.32.0
       - name: Retrieve exact previously tested model
         run: |
           curl --fail --location --retry 3 -o source.onnx https://quantumq1981.github.io/Guitar-Piano-Audio-Stem-Extract/models/mobile.onnx
           echo '1333aa4a748126703b2824286c6a38dd0774491f7b2ad9fb802eba190191946f  source.onnx' | sha256sum --check
       - name: Selective graph folding and CPU parity
         run: /usr/bin/time -v python scripts/mobile_graph.py source.onnx candidate.onnx graph-report.json
+      - name: Unit tests for the memory passes
+        run: python -m unittest scripts/test_mobile_memory.py -v
+      - name: Memory-reduced candidate (exact passes, two-level reductions, external data) and CPU parity
+        run: |
+          /usr/bin/time -v python scripts/mobile_memory.py candidate.onnx candidate-memory.onnx memory-report.json \
+            --external-data --accurate-reductions
+          sha256sum candidate.onnx candidate-memory.onnx candidate-memory.onnx.data
       - uses: actions/upload-artifact@v4
         with:
           name: experimental-mobile-graph
           path: |
             candidate.onnx
             graph-report.json
+            candidate-memory.onnx
+            candidate-memory.onnx.data
+            memory-report.json
+          retention-days: 7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --no-audit --no-fund
+      - run: npm install --no-save --package-lock=false playwright
+      - run: npx playwright install --with-deps chromium
+      - name: Install isolated compatibility runtime
+        run: npm install --prefix ort-compat --no-save --package-lock=false onnxruntime-web@1.23.2
+      - name: Compare native source and candidate on the browser fixture
+        id: native-reference
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import math
+
+          import numpy as np
+          import onnxruntime as ort
+
+          t = np.arange(343980, dtype=np.float64) / 44100
+          rng = np.random.default_rng(42)
+          x = np.stack([0.08*np.sin(2*np.pi*440*t), 0.08*np.sin(2*np.pi*660*t)])[None]
+          x = (x + 0.01*rng.standard_normal(x.shape)).astype('<f4')
+          x.tofile('reference-input.bin')
+
+          opts = ort.SessionOptions()
+          opts.enable_cpu_mem_arena = False
+          opts.enable_mem_pattern = False
+          opts.intra_op_num_threads = 1
+          opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+
+          def reference(model):
+              session = ort.InferenceSession(f'{model}.onnx', sess_options=opts,
+                                             providers=['CPUExecutionProvider'])
+              output = session.run(['stems'], {'mix': x})[0]
+              if output.shape != (1, 6, 2, 343980) or not np.isfinite(output).all():
+                  raise ValueError(f'Invalid native {model} output shape or values')
+              output.astype('<f4', copy=False).tofile(f'reference-{model}.bin')
+              return output[0].astype(np.float64)
+
+          source = reference('source')
+          candidate = reference('candidate')
+          min_snr_db = 40
+          near_silent_rms = 1e-5
+
+          def metrics(signal, actual):
+              difference = actual - signal
+              signal_power = float(np.mean(np.square(signal)))
+              error_power = float(np.mean(np.square(difference)))
+              snr = math.inf if error_power == 0 else (
+                  10 * math.log10(signal_power / error_power) if signal_power else -math.inf)
+              reference_rms = math.sqrt(signal_power)
+              return {
+                  'referenceRms': reference_rms,
+                  'errorRms': math.sqrt(error_power),
+                  'maxAbs': float(np.max(np.abs(difference))),
+                  'snrDb': snr if math.isfinite(snr) else ('Infinity' if snr > 0 else '-Infinity'),
+                  'nearSilent': reference_rms < near_silent_rms,
+                  'pass': snr >= min_snr_db,
+              }
+
+          names = ['drums', 'bass', 'other', 'vocals', 'guitar', 'piano']
+          stems = [{'name': name, **metrics(source[i], candidate[i])} for i, name in enumerate(names)]
+          with open('candidate.onnx', 'rb') as model:
+              candidate_sha = hashlib.file_digest(model, 'sha256').hexdigest()
+          report = {
+              'runtime': ort.__version__,
+              'threads': opts.intra_op_num_threads,
+              'fixtureSha256': hashlib.sha256(x.tobytes()).hexdigest(),
+              'candidateSha256': candidate_sha,
+              'minSnrDb': min_snr_db,
+              'nearSilentRms': near_silent_rms,
+              'global': metrics(source, candidate),
+              'stems': stems,
+              'pass': all(stem['pass'] for stem in stems),
+          }
+          with open('browser-native-parity.json', 'w') as output:
+              print(json.dumps(report, indent=2, allow_nan=False), file=output)
+          print(json.dumps(report, allow_nan=False))
+          PY
+      - name: Native references on the music fixture
+        id: music-reference
+        run: |
+          python scripts/mobile_fixture.py music-input.bin music-stems.bin
+          python - <<'PY'
+          import numpy as np
+          import onnxruntime as ort
+
+          x = np.fromfile('music-input.bin', dtype='<f4').reshape(1, 2, 343980)
+          opts = ort.SessionOptions()
+          opts.enable_cpu_mem_arena = False
+          opts.enable_mem_pattern = False
+          opts.intra_op_num_threads = 1
+          opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+          for model, out in (('source', 'music-source.bin'), ('candidate-memory', 'music-candidate.bin')):
+              y = ort.InferenceSession(f'{model}.onnx', sess_options=opts,
+                                       providers=['CPUExecutionProvider']).run(['stems'], {'mix': x})[0]
+              if y.shape != (1, 6, 2, 343980) or not np.isfinite(y).all():
+                  raise ValueError(f'Invalid native {model} output')
+              y.astype('<f4', copy=False).tofile(out)
+          PY
+      - name: Browser compatibility matrix
+        timeout-minutes: 60
+        run: |
+          set +e
+          passed=0
+          for model in candidate candidate-memory; do
+            data=""
+            if [ "$model" = candidate-memory ]; then data=candidate-memory.onnx.data; fi
+            for pinned in 0 1; do
+              for provider in wasm webgpu; do
+                echo "::group::model=$model pinned=$pinned provider=$provider"
+                ORT_MODEL=$model.onnx ORT_MODEL_DATA=$data ORT_PINNED=$pinned ORT_PROVIDER=$provider timeout --kill-after=15s 12m node scripts/mobile-webgpu-check.mjs 2>&1 | tee "browser-$model-$pinned-$provider.log"
+                code=${PIPESTATUS[0]}
+                echo "exit=$code" | tee -a "browser-$model-$pinned-$provider.log"
+                if [ "$code" -eq 0 ]; then passed=1; fi
+                echo "::endgroup::"
+              done
+            done
+          done
+          test "$passed" -eq 1
+      - name: Validate the memory candidate in both WASM versions (music fixture, 3 runs, 40 dB per stem)
+        if: ${{ !cancelled() && steps.native-reference.outcome == 'success' && steps.music-reference.outcome == 'success' }}
+        timeout-minutes: 26
+        run: |
+          set +e
+          failed=0
+          for pinned in 0 1; do
+            echo "::group::memory candidate WASM parity pinned=$pinned"
+            ORT_MODEL=candidate-memory.onnx ORT_MODEL_DATA=candidate-memory.onnx.data ORT_FIXTURE=music ORT_PINNED=$pinned ORT_PROVIDER=wasm ORT_VALIDATE=1 timeout --kill-after=15s 12m node scripts/mobile-webgpu-check.mjs 2>&1 | tee "browser-memory-validation-$pinned.log"
+            code=${PIPESTATUS[0]}
+            echo "exit=$code" | tee -a "browser-memory-validation-$pinned.log"
+            if [ "$code" -ne 0 ]; then failed=1; fi
+            echo "::endgroup::"
+          done
+          if ! python -c 'import json, sys; sys.exit(not json.load(open("browser-native-parity.json"))["pass"])'; then
+            failed=1
+            echo "::error::Native source-to-candidate parity failed"
+          fi
+          exit "$failed"
+      - name: Diagnostic - PR 12 candidate in WASM on the tone fixture (known 25-44 dB gap, not gating)
+        if: ${{ !cancelled() && steps.native-reference.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 14
+        run: |
+          set +e
+          for pinned in 0 1; do
+            ORT_PINNED=$pinned ORT_PROVIDER=wasm ORT_VALIDATE=1 ORT_RUNS=1 timeout --kill-after=15s 6m node scripts/mobile-webgpu-check.mjs 2>&1 | tee "browser-wasm-validation-$pinned.log"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-compatibility-results
+          path: |
+            browser-*.log
+            browser-native-parity.json
+            memory-report.json
           retention-days: 7

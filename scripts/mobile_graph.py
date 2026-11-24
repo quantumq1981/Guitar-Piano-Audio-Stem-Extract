@@ -28,7 +28,7 @@ def prepare(src, dst):
     model = onnx.load(src)
     g = model.graph
     before = inventory(model)
-    # Only small integer tensors are eligible. Never evaluate weight Casts.
+    # Only small integer initializers are eligible. Floating constants must originate in ISTFT Constant nodes.
     constants = {}
     for t in g.initializer:
         if t.data_type in (onnx.TensorProto.INT32, onnx.TensorProto.INT64) and np.prod(t.dims) <= 4096:
@@ -48,7 +48,7 @@ def prepare(src, dst):
         try:
             if n.op_type == "Constant" and "value" in attrs:
                 t = attrs["value"]
-                if t.data_type in (onnx.TensorProto.INT32, onnx.TensorProto.INT64) and np.prod(t.dims) <= 4096:
+                if (t.data_type in (onnx.TensorProto.INT32, onnx.TensorProto.INT64) and np.prod(t.dims) <= 4096) or ("istft" in n.name.lower() and t.data_type in (onnx.TensorProto.FLOAT, onnx.TensorProto.FLOAT16, onnx.TensorProto.DOUBLE) and np.prod(t.dims) <= 2_000_000):
                     constants[n.output[0]] = numpy_helper.to_array(t)
                 continue
             if n.op_type == "Shape" and n.input[0] in shapes:
@@ -62,33 +62,51 @@ def prepare(src, dst):
                 value = ReferenceEvaluator(mini).run(None, {})[0]
         except (ValueError, TypeError, RuntimeError, IndexError, NotImplementedError):
             continue
-        if value is None or value.dtype not in (np.int32, np.int64) or value.size > 4096:
+        if value is None:
+            continue
+        integer = value.dtype in (np.int32, np.int64) and value.size <= 4096
+        floating = ("istft" in n.name.lower() and n.op_type != "Cast" and value.dtype in (np.float16, np.float32, np.float64) and value.size <= 2_000_000)
+        if not (integer or floating):
             continue
         constants[n.output[0]] = value
         replacement = helper.make_node("Constant", [], list(n.output), name=n.name + "_mobile_static", value=numpy_helper.from_array(value))
         g.node[i].CopyFrom(replacement)
         folded.append(n.name)
+    # Remove only unused pure nodes in this flat graph; preserve graph outputs.
+    if not any(a.type in (onnx.AttributeProto.GRAPH, onnx.AttributeProto.GRAPHS) for n in g.node for a in n.attribute):
+        live = {o.name for o in g.output}
+        keep = []
+        for n in reversed(g.node):
+            if any(o in live for o in n.output):
+                keep.append(n)
+                live.update(n.input)
+        kept = list(reversed(keep))
+        del g.node[:]
+        g.node.extend(kept)
     onnx.checker.check_model(model)
     onnx.save(model, dst)
     return {"before": before, "after": inventory(model), "folded": folded, "sha256": digest(dst)}
 
 def parity(src, dst):
     rng = np.random.default_rng(42)
-    x = (rng.standard_normal((1,2,343980)) * 0.1).astype(np.float32)
+    t = np.arange(343980, dtype=np.float32) / 44100
+    inputs = [(rng.standard_normal((1,2,343980)) * 0.1).astype(np.float32), np.stack([0.1*np.sin(2*np.pi*440*t), 0.1*np.sin(2*np.pi*660*t)])[None].astype(np.float32)]
     def run(path):
         opts = ort.SessionOptions()
         opts.enable_cpu_mem_arena = False
         opts.enable_mem_pattern = False
         opts.intra_op_num_threads = 2
         s = ort.InferenceSession(path, sess_options=opts, providers=["CPUExecutionProvider"])
-        return s.run(None, {s.get_inputs()[0].name: x})[0]
-    a, b = run(src), run(dst)
-    if a.shape != (1,6,2,343980) or a.shape != b.shape or not np.isfinite(b).all():
-        raise RuntimeError(f"Invalid output shape or values: {a.shape}, {b.shape}")
-    delta = float(np.max(np.abs(a-b)))
-    if not np.allclose(a,b,rtol=1e-4,atol=1e-5):
-        raise RuntimeError(f"Parity failed: max delta {delta}")
-    return delta
+        return [s.run(None, {s.get_inputs()[0].name: x})[0] for x in inputs]
+    deltas = []
+    for a, b in zip(run(src), run(dst)):
+        if a.shape != (1,6,2,343980) or a.shape != b.shape or not np.isfinite(b).all():
+            raise RuntimeError(f"Invalid output shape or values: {a.shape}, {b.shape}")
+        delta = float(np.max(np.abs(a-b)))
+        if not np.allclose(a,b,rtol=1e-4,atol=1e-5):
+            raise RuntimeError(f"Parity failed: max delta {delta}")
+        deltas.append(delta)
+    return max(deltas)
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()

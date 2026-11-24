@@ -164,11 +164,41 @@ The owner ran the hosted test on an iPhone over 5G (Pages deploy of PR #14). Bot
 - The WASM heap is byte-for-byte the same sequence as in Chromium (172 → 515 → 515 → 616 MiB reserved, 138 → 479 → 479 → 510 MiB touched). The same malloc in the same WASM binary gives the same layout, so the CI numbers predict the device heap. What the CI cannot measure is the WebContent process total and iOS's limit.
 - Not yet tested: full songs (stem storage is the new memory term), multi-threading, other iPhones (iOS < 17.5 needs ORT 1.23.2, microsoft/onnxruntime#33426), iPad, Android.
 
+### On-device full-song separation (experimental card) **[M]**
+
+"Separate a song on this device" in the experimental card does the following:
+1. Decodes the chosen file on the page at 44.1 kHz (the existing `decodeForModel`: mono duplicated, 5.1 folded).
+2. Checks that `navigator.storage.estimate()` leaves room for the stems.
+3. Transfers the planar channels to `mobile-stage4.worker.ts`.
+4. Runs the shared core engine (`separate()`, 25 % overlap-add) with the Stage IV session.
+5. Streams every finalised block into six **24-bit WAV files in OPFS** through sync access handles. `wavStemSink` in `packages/core/src/codec/stem-wav-sink.ts` (headless-tested) writes each header with the first block and checks contiguity and completeness.
+6. The page shows an `<audio>` player and a download link per stem. Each reads the disk-backed OPFS `File`, so the stems are never copied into memory. "Delete stems from this device" removes them; the next run replaces them anyway.
+
+What the run holds in memory does not grow with song length, apart from the decoded input (≈ 85 MB for 4 min stereo):
+- the WASM heap;
+- one window of overlap-add state (16.5 MB);
+- one block's PCM per stem.
+
+Real app in headless Chromium (iPhone user agent, 390 px), 45 s of *D'Angelo – Lady* as lossless WAV:
+
+| Check | Result |
+|---|---|
+| Windows | 8, 3:46–3:51 total (≈ 28 s per window on the 4 vCPU container; the iPhone did 12–13 s per window) |
+| WASM heap over the song | 172 → 515 → 616 MiB reserved, touched 479 → 510 MiB, flat for windows 3–8 |
+| Stems | 6 × 11 MiB WAV (24-bit), 1,984,500 frames each, no clipping |
+| Browser WAV24 vs native onnxruntime-node, same engine and model, float | drums 93.8 · bass 95.0 · other 85.6 · vocals 94.8 · guitar 89.7 · piano 89.2 dB |
+| Same with 16-bit stems (first version) | 44.6–73.6 dB vs float; the quiet "other" stem (−31.7 dB re mix) was limited by 16-bit quantisation, not the model (63.3 dB against native quantised to 16-bit) |
+| 5 s mono file | 1 window, six stems, delete clears OPFS |
+
+A capability gotcha that a first version shipped: `createSyncAccessHandle` exists only in dedicated workers, so checking `FileSystemFileHandle.prototype` on the page rejects every browser. The page checks only `navigator.storage.getDirectory`, and the worker checks for sync access.
+
+The time estimate shown before a run uses the iPhone's 12.5 s per window. A 4-min song is 41 windows, so about 9 min on that phone **[E]**; this has not yet been measured on a device.
+
 ## Stage IV — remaining work (in order)
 1. ~~Physical iPhone: session create, one window, repeated windows~~ **done 2026-11-24 (above).** Still to test: other iPhones/iPads (old iOS → ORT 1.23.2) and Android Chrome. Read `[stems …]`-style labels from the start: record ORT version, Safari version and touched heap. The WASM path should stay on the pinned 1.23.2 plain build, because of microsoft/onnxruntime#33426 (JSC on Safari < 17.5; see Tab Translator Pro `stem-model-core.js`).
 2. App integration behind the experimental benchmark (Stage III item 3). The worker loads graph + `.data` with `externalData`, each file SHA-256-verified and cached, and drops its reference to the data buffer after `create()`. Use one thread, graph optimisation disabled, a verified cache, transferable buffers, cancellation, crash marker and worker termination. The registry needs two pinned hashes (graph + data).
 3. Further exact memory cuts. Chunk the frequency-branch DConv along its 512-row batch (every op there is per row; replace constant batch dims in Reshape targets with 0). Run the ISTFT tail per source (batch 12 → 2). Both remove 63 MiB tensors, the new peak.
-4. Full tracks (next): one session reused across windows (touched memory 479–510 MiB over 3 windows on the iPhone). Store stems without holding six float32 copies of the song, which is 508 MB for 4 min stereo: Int16 (254 MB, validate quantisation) or OPFS streaming (≈ 0). Recycle the worker if the heap creeps. Then try 2–4 threads for speed, since the device reported crossOriginIsolated true and 4 cores.
+4. Full tracks: **built** (experimental card, above; Chromium-verified). Next: a full song on the iPhone, then threads. Original note: one session reused across windows (touched memory 479–510 MiB over 3 windows on the iPhone). Store stems without holding six float32 copies of the song, which is 508 MB for 4 min stereo: Int16 (254 MB, validate quantisation) or OPFS streaming (≈ 0). Recycle the worker if the heap creeps. Then try 2–4 threads for speed, since the device reported crossOriginIsolated true and 4 cores.
 5. WebGPU variant: static shapes, plus a shader-f16 device or fp32 weights for SwiftShader, plus GPU-process memory measurement on iOS.
 6. Promotion rule unchanged: one artifact on every tier, parity ≥ 40 dB per stem (now on the music fixture), `npm test`, `npm run typecheck`, `npm run build:web`, licences and musical quality before production.
 

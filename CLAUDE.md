@@ -31,7 +31,9 @@
 - Production builds without `VITE_API_BASE` have no server (`API_BASE === null`); server-routed jobs are disabled with an explanation.
 - Pages also serves experimental `models/mobile.onnx` and the Stage IV `models/candidate-memory.onnx` + `.data` (rebuilt in pages.yml,
   deploy fails unless SHA-256 matches `MOBILE_STAGE4_CANDIDATE` in `packages/core/src/models/mobile-experimental.ts`). Device test:
-  experimental card → "Stage IV: load + N windows" (`apps/web/src/inference/mobile-stage4.worker.ts`). Not used for separation.
+  experimental card → "Stage IV: load + N windows" (`apps/web/src/inference/mobile-stage4.worker.ts`). The same card has
+  "Separate a song on this device": core `separate()` + Stage IV session, stems streamed to OPFS as 24-bit WAV via `wavStemSink`
+  (`packages/core/src/codec/stem-wav-sink.ts`); main-app routing is unchanged (phones still go to the server).
 
 ## Conventions / invariants
 - Node runs `.ts` directly (type stripping): **erasable syntax only** (no enums, namespaces, parameter properties); import with `.ts` extensions.
@@ -55,7 +57,8 @@ Mobile Stage IV (stacked on PR #12, experimental): exact rewrites + two-level re
 (music fixture >= 61.9 dB per stem vs source, >= 84 dB same graph; owner's songs >= 58.2 / >= 75.7 dB). WebGPU sessions now
 initialise in Chromium with static shapes (inference needs shader-f16). **Physical iPhone (Safari 27.2) passed** the hosted test:
 session 2.9-3.9 s, 11.9-12.9 s per 7.8 s window (1 thread), WASM heap 616 MiB / touched 510 MiB, repeats bit-identical.
-Next: full-song on-device separation with bounded stem storage, then threads, other devices.
+On-device full-song separation built in the experimental card (Chromium: memory flat over a 45 s song, browser WAV24
+vs native >= 85.6 dB per stem). Next: full song on the iPhone, then threads, other devices.
 
 ## Status (2026-11-23)
 Done: core + tests (67), server pipeline/API/CLI verified on real tracks (RTF ≈ 0.63, 4 vCPU), PWA builds and runs

@@ -1,24 +1,35 @@
 /// <reference lib="webworker" />
 /**
- * Opt-in device test of the Stage IV low-memory candidate (docs/MOBILE-INFERENCE-DEVELOPMENT.md): plain WASM
- * build, one thread, graph optimisation disabled, external weights, both files SHA-256 verified. It reports the
- * WebAssembly heap at every stage, so a tab the OS kills still leaves the last measured stage in the log.
- * It is not used for separation.
+ * Opt-in experiments with the Stage IV low-memory candidate (docs/MOBILE-INFERENCE-DEVELOPMENT.md): plain WASM
+ * build, one thread, graph optimisation disabled, external weights, both files SHA-256 verified. Every stage is
+ * reported with the WebAssembly heap, so a tab the OS kills still leaves the last measured stage in the log.
+ *
+ *  - `test`: N synthetic windows (memory, speed, repeatability).
+ *  - `song`: a whole decoded song through the shared overlap-add engine. Each stem streams into a 24-bit WAV in
+ *    the origin-private file system (OPFS) as blocks are finalised, so memory does not grow with song length.
  */
 import {
+  MOBILE_STAGE4_CANDIDATE,
   capWasmMemoryDescriptor,
   maxAbsDifference,
-  MOBILE_STAGE4_CANDIDATE,
+  memorySource,
+  planChunks,
+  separate,
   stage4TestSignal,
   touchedBytes,
+  wavStemSink,
   WASM_CAP_LADDER_PAGES,
   type PinnedFile,
+  type SegmentRunner,
 } from '@stemsplit/core';
+import { STAGE4_STEM_DIRECTORY, STAGE4_STEM_SAMPLE_FORMAT, type Stage4Request, type Stage4Message } from './stage4-protocol.ts';
 
 declare const self: DedicatedWorkerGlobalScope;
 
-const report = (message: string) => self.postMessage({ message });
+const post = (msg: Stage4Message) => self.postMessage(msg);
+const report = (message: string) => post({ message });
 const mib = (bytes: number) => (bytes / 2 ** 20).toFixed(0) + ' MiB';
+const clock = (ms: number) => `${Math.floor(ms / 60_000)}:${String(Math.round(ms / 1000) % 60).padStart(2, '0')}`;
 
 // Track (and cap) every WebAssembly.Memory this worker creates. Installed before ORT is imported.
 const memories: WebAssembly.Memory[] = [];
@@ -60,7 +71,10 @@ async function fetchVerified(file: PinnedFile): Promise<Uint8Array> {
   return bytes;
 }
 
-async function run(windows: number): Promise<void> {
+type Ort = typeof import('onnxruntime-web/wasm');
+type Session = Awaited<ReturnType<Ort['InferenceSession']['create']>>;
+
+async function openSession(): Promise<{ ort: Ort; session: Session }> {
   const c = MOBILE_STAGE4_CANDIDATE;
   report(`Environment: ${navigator.userAgent} · crossOriginIsolated ${String(self.crossOriginIsolated)} · ${navigator.hardwareConcurrency} cores`);
   report(`Downloading Stage IV model (${mib(c.graph.bytes + c.data.bytes)}, two files)…`);
@@ -72,50 +86,104 @@ async function run(windows: number): Promise<void> {
   ort.env.wasm.proxy = false;
   ort.env.logLevel = 'warning';
   report(`Creating session (ORT ${ort.env.versions.web ?? '?'}, WASM, 1 thread, graph optimisation disabled)…`);
-  let session: Awaited<ReturnType<typeof ort.InferenceSession.create>> | undefined;
+  const start = performance.now();
+  const session = await ort.InferenceSession.create(graph, {
+    executionProviders: ['wasm'],
+    graphOptimizationLevel: c.session.graphOptimizationLevel,
+    enableMemPattern: c.session.enableMemPattern,
+    enableCpuMemArena: c.session.enableCpuMemArena,
+    externalData: [{ path: c.data.file, data }],
+  });
+  graph = null;
+  data = null;
+  report(`Session ready in ${((performance.now() - start) / 1000).toFixed(1)} s · ${heap()} · ${capNote}`);
+  return { ort, session };
+}
+
+function runner(ort: Ort, session: Session): SegmentRunner {
+  const { io } = MOBILE_STAGE4_CANDIDATE;
+  const shape = [1, io.channels, io.segmentFrames];
+  return {
+    io,
+    async run(input) {
+      const tensor = new ort.Tensor('float32', input, shape);
+      const outputs = await session.run({ [io.inputName]: tensor });
+      tensor.dispose();
+      const stems = outputs[io.outputName];
+      const data = stems ? ((await stems.getData()) as Float32Array) : null;
+      const copy = data ? new Float32Array(data) : null;
+      for (const t of Object.values(outputs)) t.dispose();
+      if (!copy || copy.length !== io.stems.length * io.channels * io.segmentFrames || !copy.every(Number.isFinite)) {
+        throw new Error('missing, misshapen or non-finite model output');
+      }
+      return copy;
+    },
+  };
+}
+
+async function runTest(windows: number): Promise<void> {
+  const { ort, session } = await openSession();
   try {
-    let start = performance.now();
-    session = await ort.InferenceSession.create(graph, {
-      executionProviders: ['wasm'],
-      graphOptimizationLevel: c.session.graphOptimizationLevel,
-      enableMemPattern: c.session.enableMemPattern,
-      enableCpuMemArena: c.session.enableCpuMemArena,
-      externalData: [{ path: c.data.file, data }],
-    });
-    graph = null;
-    data = null;
-    report(`Session ready in ${((performance.now() - start) / 1000).toFixed(1)} s · ${heap()} · ${capNote}`);
-    const { segmentFrames, channels, inputName, outputName, stems } = c.io;
+    const { segmentFrames, channels } = MOBILE_STAGE4_CANDIDATE.io;
+    const run = runner(ort, session);
     const mix = stage4TestSignal(segmentFrames, channels);
     let first: Float32Array | null = null;
     for (let w = 1; w <= windows; w++) {
       report(`Running window ${w}/${windows} (7.8 s stereo)…`);
-      const input = new ort.Tensor('float32', mix, [1, channels, segmentFrames]);
-      start = performance.now();
-      const outputs = await session.run({ [inputName]: input });
+      const start = performance.now();
+      const result = await run.run(mix);
       const seconds = (performance.now() - start) / 1000;
-      const tensor = outputs[outputName];
-      const result = tensor ? ((await tensor.getData()) as Float32Array) : null;
-      input.dispose();
-      for (const t of Object.values(outputs)) t.dispose();
-      if (!result || result.length !== stems.length * channels * segmentFrames || !result.every(Number.isFinite)) {
-        throw new Error(`window ${w}: missing, misshapen or non-finite output`);
-      }
       let repeat = '';
-      if (first === null) first = result.slice();
+      if (first === null) first = result;
       else repeat = ` · repeat vs window 1: max |Δ| ${maxAbsDifference(first, result)}`;
       report(`Window ${w} PASS in ${seconds.toFixed(1)} s (real-time factor ${(seconds / 7.8).toFixed(2)}) · ${heap()}${repeat}`);
     }
   } finally {
-    await session?.release();
+    await session.release();
   }
   report(`Session released · ${heap()}`);
+  post({ done: true, message: 'Stage IV test complete' });
+}
+
+async function runSong(left: Float32Array, right: Float32Array): Promise<void> {
+  const { io } = MOBILE_STAGE4_CANDIDATE;
+  const plan = planChunks(left.length, io.segmentFrames);
+  report(`Song: ${(left.length / io.sampleRate).toFixed(1)} s · ${plan.chunks.length} windows · stems stream to on-device storage as 24-bit WAV`);
+  if (typeof FileSystemFileHandle === 'undefined' || !('createSyncAccessHandle' in FileSystemFileHandle.prototype)) {
+    throw new Error('This browser cannot write files from a worker (OPFS sync access handles are missing)');
+  }
+  const root = await navigator.storage.getDirectory();
+  await root.removeEntry(STAGE4_STEM_DIRECTORY, { recursive: true }).catch(() => {});
+  const dir = await root.getDirectoryHandle(STAGE4_STEM_DIRECTORY, { create: true });
+  const files = io.stems.map((stem) => `${stem}.wav`);
+  const handles = await Promise.all(files.map(async (name) => (await dir.getFileHandle(name, { create: true })).createSyncAccessHandle()));
+  const { ort, session } = await openSession();
+  try {
+    const sink = wavStemSink(io.stems.length, left.length, { sampleRate: io.sampleRate, channels: io.channels, sampleFormat: STAGE4_STEM_SAMPLE_FORMAT },
+      (stem, offset, bytes) => {
+        const written = handles[stem]!.write(bytes, { at: offset });
+        if (written !== bytes.length) throw new Error(`Short write to ${files[stem]} (${written} of ${bytes.length} bytes): storage full?`);
+      });
+    await separate(memorySource([left, right], io.sampleRate), runner(ort, session), sink, {
+      onProgress: (p) => report(`Window ${p.chunk}/${p.chunks} done · ${clock(p.elapsedMs)} elapsed · about ${clock(p.etaMs ?? 0)} left · ${heap()}`),
+    });
+    const summary = sink.finish();
+    for (const h of handles) h.flush();
+    const clipped = io.stems.filter((_, i) => (summary.peaks[i] ?? 0) > 1);
+    report(`All ${summary.frames} frames written · ${io.stems.length} × ${mib(summary.fileBytes)}` +
+      (clipped.length ? ` · clipped (peak above full scale): ${clipped.join(', ')}` : ' · no clipping'));
+  } finally {
+    for (const h of handles) h.close();
+    await session.release();
+  }
+  report(`Session released · ${heap()}`);
+  post({ done: true, message: 'Song separation complete', files });
 }
 
 if (!self.name.startsWith('em-pthread')) {
-  self.onmessage = (e: MessageEvent<{ windows: number }>) => {
-    run(Math.max(1, Math.min(5, e.data.windows)))
-      .then(() => self.postMessage({ done: true, message: 'Stage IV test complete' }))
-      .catch((error: unknown) => self.postMessage({ done: true, message: `FAIL: ${String(error)} · ${heap()}` }));
+  self.onmessage = (e: MessageEvent<Stage4Request>) => {
+    const msg = e.data;
+    const job = msg.type === 'song' ? runSong(msg.left, msg.right) : runTest(Math.max(1, Math.min(5, msg.windows)));
+    job.catch((error: unknown) => post({ done: true, message: `FAIL: ${String(error)} · ${heap()}` }));
   };
 }

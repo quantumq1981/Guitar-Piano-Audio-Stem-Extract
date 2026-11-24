@@ -6,6 +6,7 @@ export * from './dsp/fft.ts';
 export * from './dsp/spatial-split.ts';
 export * from './dsp/metrics.ts';
 export * from './codec/wav.ts';
+export * from './codec/stem-wav-sink.ts';
 export * from './capability/probe.ts';
 export * from './capability/routing.ts';
 export * from './memory/budget.ts';

@@ -1,6 +1,6 @@
 # Mobile inference development — Engineering handoff
 
-Checkpoint: 2026-11-24 UTC (Stage IV). PR #12 and the Stage IV PR stacked on it remain open; experimental work is not production-approved. Stage IV below supersedes the Stage III remaining-work list.
+Checkpoint: 2026-11-24 UTC (Stage IV; first physical iPhone pass recorded). PR #12 and the Stage IV PR stacked on it remain open; experimental work is not production-approved. Stage IV below supersedes the Stage III remaining-work list.
 
 ## Stage I — Original Claude development
 Read [CLAUDE.md](../CLAUDE.md), [original engineering specification](../Guitar%20-Piano-ASE-Separation%20App.md), [ARCHITECTURE.md](ARCHITECTURE.md), and [API.md](API.md). Preserve these historical documents. Stage I deliberately routes phones to server because native CPU peak RSS was 2.40 GiB with arena/pattern disabled, 4.7 GiB with defaults. Original browser/server parity was 64.3 dB; original server RTF 0.45–0.68 on four vCPU. Stage II investigates whether local six-stem inference can become practical without paid hosting; it does not invalidate the original safeguards.
@@ -150,11 +150,25 @@ Real app in headless Chromium (Vite preview, 4 vCPU), "load + 3 windows" **[M]**
 
 What to record from a device run: the full log text (environment line with the Safari version, every heap line, the last stage before any interruption), the model and iOS version, and whether other tabs were open. If it fails at "Creating session" with a RangeError, the memory cap ladder was refused. If the tab closes during a window, the last heap line is the best available estimate of the kill threshold.
 
+### First physical-device result — iPhone, 2026-11-24 **[M]**
+
+The owner ran the hosted test on an iPhone over 5G (Pages deploy of PR #14). Both runs passed. Safari logged its user agent as `Macintosh; Intel Mac OS X 10_15_7 … Version/27.2 Safari/605.1.15`, the desktop-class UA. It also logged `crossOriginIsolated true` and 4 cores, and ORT 1.31.1 WASM with one thread. The shared-memory maximum was capped at 1024 MiB, and Safari accepted that.
+
+| Run | Download + verify | Session ready | Window times (7.8 s each) | WASM heap (touched) after last window | Repeat vs window 1 |
+|---|---:|---:|---|---:|---|
+| load + 1 window | 9 s (130 MB) | 3.9 s | 11.9 s | 515 MiB (479) | — |
+| load + 3 windows | — | 2.9 s | 12.3 / 12.8 / 12.9 s | 616 MiB (510) | max \|Δ\| 0, both repeats |
+
+- **Six-stem htdemucs runs in mobile Safari, on device and offline-capable, with no server.** It is the same graph and weights CI validated (≥ 61.9 dB per stem against native).
+- The per-window real-time factor is 1.53–1.66 (single thread), about 2× faster than the 4 vCPU CI container (24.5–26.7 s). With the 25 % overlap (5.85 s stride), a full song would take ≈ 2.1× its length, so ≈ 8.5 min for 4 min of audio **[E]**.
+- The WASM heap is byte-for-byte the same sequence as in Chromium (172 → 515 → 515 → 616 MiB reserved, 138 → 479 → 479 → 510 MiB touched). The same malloc in the same WASM binary gives the same layout, so the CI numbers predict the device heap. What the CI cannot measure is the WebContent process total and iOS's limit.
+- Not yet tested: full songs (stem storage is the new memory term), multi-threading, other iPhones (iOS < 17.5 needs ORT 1.23.2, microsoft/onnxruntime#33426), iPad, Android.
+
 ## Stage IV — remaining work (in order)
-1. Physical devices with the Stage IV candidate (hosted test above): iOS/iPadOS Safari session create, then one window, then repeated windows. Read `[stems …]`-style labels from the start: record ORT version, Safari version and touched heap. The WASM path should stay on the pinned 1.23.2 plain build, because of microsoft/onnxruntime#33426 (JSC on Safari < 17.5; see Tab Translator Pro `stem-model-core.js`).
+1. ~~Physical iPhone: session create, one window, repeated windows~~ **done 2026-11-24 (above).** Still to test: other iPhones/iPads (old iOS → ORT 1.23.2) and Android Chrome. Read `[stems …]`-style labels from the start: record ORT version, Safari version and touched heap. The WASM path should stay on the pinned 1.23.2 plain build, because of microsoft/onnxruntime#33426 (JSC on Safari < 17.5; see Tab Translator Pro `stem-model-core.js`).
 2. App integration behind the experimental benchmark (Stage III item 3). The worker loads graph + `.data` with `externalData`, each file SHA-256-verified and cached, and drops its reference to the data buffer after `create()`. Use one thread, graph optimisation disabled, a verified cache, transferable buffers, cancellation, crash marker and worker termination. The registry needs two pinned hashes (graph + data).
 3. Further exact memory cuts. Chunk the frequency-branch DConv along its 512-row batch (every op there is per row; replace constant batch dims in Reshape targets with 0). Run the ISTFT tail per source (batch 12 → 2). Both remove 63 MiB tensors, the new peak.
-4. Full tracks: one session reused across windows (touched memory is flat over 3–4 runs); OPFS/bounded streaming; recycle the worker if the heap creeps on device.
+4. Full tracks (next): one session reused across windows (touched memory 479–510 MiB over 3 windows on the iPhone). Store stems without holding six float32 copies of the song, which is 508 MB for 4 min stereo: Int16 (254 MB, validate quantisation) or OPFS streaming (≈ 0). Recycle the worker if the heap creeps. Then try 2–4 threads for speed, since the device reported crossOriginIsolated true and 4 cores.
 5. WebGPU variant: static shapes, plus a shader-f16 device or fp32 weights for SwiftShader, plus GPU-process memory measurement on iOS.
 6. Promotion rule unchanged: one artifact on every tier, parity ≥ 40 dB per stem (now on the music fixture), `npm test`, `npm run typecheck`, `npm run build:web`, licences and musical quality before production.
 

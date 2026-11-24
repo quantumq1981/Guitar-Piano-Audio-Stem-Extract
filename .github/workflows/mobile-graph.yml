@@ -40,6 +40,26 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - name: Install isolated compatibility runtime
         run: npm install --prefix ort-compat --no-save --package-lock=false onnxruntime-web@1.23.2
+      - name: Generate native CPU reference fixture
+        run: |
+          python - <<'PY'
+          import numpy as np
+          import onnxruntime as ort
+          t = np.arange(343980, dtype=np.float64) / 44100
+          rng = np.random.default_rng(42)
+          x = np.stack([0.08*np.sin(2*np.pi*440*t), 0.08*np.sin(2*np.pi*660*t)])[None]
+          x = (x + 0.01*rng.standard_normal(x.shape)).astype('<f4')
+          opts = ort.SessionOptions()
+          opts.enable_cpu_mem_arena = False
+          opts.enable_mem_pattern = False
+          opts.intra_op_num_threads = 2
+          opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+          session = ort.InferenceSession('source.onnx', sess_options=opts, providers=['CPUExecutionProvider'])
+          y = session.run(['stems'], {'mix':x})[0]
+          assert y.shape == (1,6,2,343980) and np.isfinite(y).all()
+          x.tofile('reference-input.bin')
+          y.astype('<f4').tofile('reference-output.bin')
+          PY
       - name: Browser compatibility matrix
         timeout-minutes: 60
         run: |
@@ -56,6 +76,11 @@ jobs:
             done
           done
           test "$passed" -eq 1
+      - name: Pinned WASM repeated inference and numerical parity
+        timeout-minutes: 15
+        run: |
+          set -o pipefail
+          ORT_PINNED=1 ORT_PROVIDER=wasm ORT_VALIDATE=1 timeout --kill-after=15s 12m node scripts/mobile-webgpu-check.mjs 2>&1 | tee browser-wasm-validation.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:

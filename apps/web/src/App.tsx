@@ -1,5 +1,6 @@
 import type { SeparationScope } from '@stemsplit/core';
 import { SERVER_LIMITS } from '@stemsplit/core';
+import { GpuDiagnostics } from './components/GpuDiagnostics.tsx';
 import { RoutingBanner } from './components/RoutingBanner.tsx';
 import { StemMixer } from './components/StemMixer.tsx';
 import { useSeparation } from './session.ts';
@@ -18,7 +19,7 @@ export function App() {
     <main className="app">
       <header>
         <h1>Stem Splitter</h1>
-        <p className="muted">Guitar and piano isolation. Phones process on our servers; capable desktops can run on-device.</p>
+        <p className="muted">Guitar and piano isolation. Local processing depends on browser capabilities.</p>
       </header>
 
       <section className="card">
@@ -37,17 +38,17 @@ export function App() {
           <legend>Separation</legend>
           {SCOPES.map((o) => (
             <label key={o.id} className={s.scope === o.id ? 'scope scope--on' : 'scope'}>
-              <input type="radio" name="scope" value={o.id} checked={s.scope === o.id} onChange={() => s.setScope(o.id)} />
+              <input type="radio" name="scope" value={o.id} checked={s.scope === o.id} disabled={o.id === 'guitar' && !s.serverConfigured} onChange={() => s.setScope(o.id)} />
               <span>{o.label}</span>
               <small>{o.detail}</small>
             </label>
           ))}
           <label className="check">
-            <input type="checkbox" checked={s.refinePiano} onChange={(e) => s.setRefinePiano(e.target.checked)} />
+            <input type="checkbox" checked={s.refinePiano} disabled={!s.serverConfigured} onChange={(e) => s.setRefinePiano(e.target.checked)} />
             Refine piano (server)
           </label>
           <label className="check">
-            <input type="checkbox" checked={s.preference === 'force-server'} onChange={(e) => s.setPreference(e.target.checked ? 'force-server' : 'auto')} />
+            <input type="checkbox" checked={s.preference === 'force-server'} disabled={!s.serverConfigured} onChange={(e) => s.setPreference(e.target.checked ? 'force-server' : 'auto')} />
             Always use the server
           </label>
         </fieldset>
@@ -64,6 +65,7 @@ export function App() {
         </button>
       </section>
 
+      <GpuDiagnostics disabled={busy} />
       {renderStatus()}
 
       {s.phase.kind === 'ready' && s.player.current && (

@@ -1,4 +1,4 @@
-# Mobile inference development — Stage II handoff
+# Mobile inference development — Engineering handoff
 
 Checkpoint: 2026-11-24 UTC. PR #12 remains open; experimental work is not production-approved.
 
@@ -32,7 +32,7 @@ Branch mobile/phase-7-istft. Initial head d37d46a8e5a0b091b9ffd9cc7ec43f1d63c1b4
 Run 45320159687: graph preparation and CPU parity passed; Chromium WebGPU initialization failed: transformer_memcpy.cc:254 !node_provider_type.empty() was false. Provider type for Expand node with name '/real_istft/Expand' is not set. This reproduces provider assignment failure outside Safari. Do not confuse it with OOM.
 Run 45325334423: current WASM passed (4.1971 s init, 23.5646 s total); pinned 1.23.2 WASM passed (2.6746 s init, 22.057 s total). Current WebGPU same Expand error; pinned WebGPU threw numeric error 260851112. These are synthetic single-window Chromium tests, not mobile tests.
 
-### Latest checkpoint — run 45325896555, job 138215288412
+### Final Stage II checkpoint — run 45325896555, job 138215288412
 https://github.com/quantumq1981/Guitar-Piano-Audio-Stem-Extract/actions/runs/45325896555
 Overall failure at pinned WASM numerical parity step. Graph folding, CPU parity, native reference generation, compatibility matrix and artifact upload passed.
 | Configuration | Init s | Total s | Baseline KiB PSS | Peak KiB PSS |
@@ -52,21 +52,46 @@ Tab Translator Pro: https://github.com/quantumq1981/Tab-Translator-Pro/tree/main
 - SHA-keyed cache, verify cached/fresh bytes, evict corrupt entries, quota failures nonfatal; no heavy main-thread fallback. Close AudioContext, cancel stale requests, persist interrupted-run marker. Do not blindly transplant WebAssembly.Memory monkeypatch.
 - Browser PSS benchmarks and real musical fixtures are useful; Chromium is not physical Safari. Shared beat grid, score/audio DTW alignment, guitar transcription and MusicXML/MIDI/CSMPN integration are later opportunities.
 
-## Stage III — next actions in order
-1. Keep PR #12 open. Improve diagnostic gate to report all six stems on every run before failing; include reference RMS, error RMS, max absolute error, global SNR, repeat consistency and phase-specific memory. Keep strict 40 dB contract; explicitly label near-silent stems and investigate absolute errors without silently passing them.
-2. Compare native source vs native candidate with identical optimization settings and fixture; then candidate native vs pinned and current WASM using identical bytes. Pin and record runtime versions. Test real licensed musical clips with meaningful guitar and piano energy. Separate numerical parity from ground-truth separation SDR/leakage.
-3. Measure session-create, inference, repeated-window and cleanup memory separately; track process tree and PSS sampling coverage. Compare source and candidate; investigate shorter re-export or external DSP ISTFT if needed. Avoid unbounded constant folding (preflight shape/bytes, global budget); never fold learned weight Casts.
-4. If memory/accuracy justify it, add isolated experimental WASM worker using matching pinned JS/WASM assets, single thread, disabled graph optimization, verified cache, transferable buffers, cancellation and crash recovery. Terminate worker on completion/failure; no main-thread retry. Keep production routing unchanged.
-5. Physical iOS/iPadOS/Android test only after CI evidence and conservative memory assessment; start session-only then one window, then multi-window, then full song. Do not infer phone compatibility from Chromium success. OPFS or bounded audio streaming and incremental output for full tracks.
-6. WebGPU research independent: analyze ISTFT Expand/Range/ScatterND dependencies, provider assignment and bounded folding, or externalize ISTFT with verified parity. No more blind optimization-level changes on phone.
-7. Run npm test, npm run typecheck, npm run build:web before production changes. Review licenses, model hashes and real music quality before promoting any model.
+## Stage III — completed diagnostic checkpoint
+
+[Actions run 45327479654](https://github.com/quantumq1981/Guitar-Piano-Audio-Stem-Extract/actions/runs/45327479654) validated commit `1d84d61`. The workflow reports per-stem reference RMS, error RMS, maximum absolute error, SNR, global SNR, repeat consistency and sampled phase memory before returning the strict 40 dB per-stem result. The `1e-5` reference RMS marker labels near-silent outputs and has no effect on the gate. [Browser logs and native report](https://github.com/quantumq1981/Guitar-Piano-Audio-Stem-Extract/actions/runs/45327479654/artifacts/14890762298).
+
+The native ONNX Runtime 1.32.0 CPU reference used the same seeded stereo fixture, one thread and disabled graph optimization for the source and the candidate. All six native outputs matched exactly (max absolute delta 0). Chromium tested the same candidate bytes (`454cc7c73cbb8ac875d836c06abb9dc180e1e6092ef30b2cd1db3836269fc769`) three times in each single-thread WASM version. Within each version, runs 2 and 3 matched run 1 exactly.
+
+A separate local Node replay used the same WASM bundles and fixture to run the source and candidate independently with optimizations disabled. Source and candidate PCM were byte-for-byte identical in WASM 1.31.1 and again in WASM 1.23.2. On this stimulus, the native-to-WASM gap is present with either graph.
+
+| Stem | Native reference RMS | WASM 1.31.1 SNR (dB) | WASM 1.23.2 SNR (dB) | 40 dB gate |
+|---|---:|---:|---:|---|
+| Drums | 3.035e-3 | 43.59 | 43.59 | Pass |
+| Bass | 3.588e-5 | 29.77 | 29.77 | Fail |
+| Other | 2.879e-3 | 34.88 | 34.88 | Fail |
+| Vocals | 4.680e-4 | 24.96 | 24.96 | Fail |
+| Guitar | 5.852e-5 | 40.09 | 40.08 | Pass |
+| Piano | 5.505e-2 | 63.55 | 63.55 | Pass |
+
+Global SNR was 57.73 dB for both configurations. The piano reference dominated the aggregate. Bass, other and vocals failed every run. Bass had the lowest reference RMS and about `1.19e-5` maximum absolute error. The synthetic fixture measures numerical agreement and repeatability. Musical separation quality still needs a fixture with known stems.
+
+| WASM version | Init (s) | Inference runs (s) | Session create PSS (KiB) | Inference PSS by run (KiB) | Session cleanup peak (KiB) |
+|---|---:|---|---:|---|---:|
+| 1.31.1 | 3.23 | 14.85 / 14.45 / 14.25 | 799019 | 1173082 / 1240562 / 1256306 | 1256478 |
+| 1.23.2 | 1.96 | 14.67 / 14.59 / 14.64 | 789575 | 1298600 / 1194380 / 1210444 | 1210668 |
+
+The highest sampled Chromium process-tree PSS in validation was about 1.20 GiB for 1.31.1 and 1.24 GiB for 1.23.2, both above the project’s 1 GiB mobile budget. Samples run every 250 ms on the Linux CI runner. Physical iOS memory is still unmeasured. WebGPU failed during session creation in both versions with the same errors as before.
+
+## Stage III — remaining work
+1. Keep PR #12 experimental. Add a cleared real-music fixture with meaningful guitar and piano energy. Compare the source and candidate in Chromium WASM and native CPU on identical samples. Measure per-stem numerical parity separately from separation quality and leakage.
+2. Repeat phase-specific memory profiling on source and candidate. Investigate a shorter re-export or external DSP ISTFT where measured savings justify it. Preflight constant-folded shapes and bytes with a global budget, and preserve learned weight Casts.
+3. If memory and accuracy justify it, add an isolated experimental WASM worker with matching pinned JS/WASM assets, one thread, disabled graph optimization, a verified cache, transferable buffers, cancellation and crash recovery. Terminate the worker after completion or failure. Keep production routing and its safeguards.
+4. Test physical iOS, iPadOS and Android after the CI and memory gates. Start with session creation, then move to a single window, multiple windows and full tracks. Use OPFS or bounded audio streaming and incremental output for full tracks.
+5. Investigate WebGPU independently. Analyze ISTFT Expand, Range and ScatterND dependencies and provider assignment, or externalize ISTFT with verified parity.
+6. Run `npm test`, `npm run typecheck` and `npm run build:web` before production changes. Review licenses, model hashes and musical quality before promoting any model.
 
 ## Files and reproduction
 scripts/fold_webgpu.py; scripts/mobile_graph.py; scripts/mobile-webgpu-check.mjs; .github/workflows/mobile-graph.yml; apps/web/src/inference/mobile-bench.worker.ts; apps/web/src/components/MobileBenchmark.tsx; packages/core/src/models/registry.ts; packages/core/src/capability/routing.ts; packages/core/src/memory/budget.ts; packages/core/src/separation/engine.ts.
-CI downloads source, checks SHA, runs python scripts/mobile_graph.py source.onnx candidate.onnx graph-report.json, uploads experimental-mobile-graph, installs Playwright Chromium and isolated ORT 1.23.2 in ort-compat, generates reference-input.bin and reference-output.bin, runs matrix with ORT_PINNED=0/1 ORT_PROVIDER=wasm/webgpu, then ORT_PINNED=1 ORT_PROVIDER=wasm ORT_VALIDATE=1 node scripts/mobile-webgpu-check.mjs. Inspect current branch before editing. Artifacts expire after seven days. User primarily works on mobile; CI is preferred over requiring desktop tools.
+CI downloads the source, checks SHA-256, runs `python scripts/mobile_graph.py source.onnx candidate.onnx graph-report.json`, uploads `experimental-mobile-graph`, and installs Playwright Chromium and ORT 1.23.2 in `ort-compat`. The workflow generates `reference-input.bin`, `reference-source.bin` and `reference-candidate.bin` and runs the WASM and WebGPU compatibility matrix. It then runs `ORT_PROVIDER=wasm ORT_VALIDATE=1` with `ORT_PINNED=0` and `ORT_PINNED=1` and uploads `browser-compatibility-results` even when validation fails. Keep the same fixture, model hashes and runtime versions for comparisons. Artifacts expire after seven days.
 
 ## Deferred product direction
 Potential Bandleader HQ integration with Tab Translator Pro, Chord Sheet Maker Pro, stage sheets, repertoire and gig prospecting; future Linux workstation with GPU for hybrid inference and commercial subscription platform. These are proposals, not implemented features. No paid infrastructure required for current research. Public GitHub inbox processing exposes uploaded audio; do not use for private recordings.
 
 ## Fresh-session prompt
-Read CLAUDE.md, docs/ARCHITECTURE.md and this file on the PR #12 branch. Inspect latest PR and Actions logs before modifying anything. Continue at Stage III step 1, preserve production behavior and leave Tab Translator Pro untouched. Do not repeat completed experiments or claim mobile readiness from CI. Update this handoff with measured results as work progresses.
+Read CLAUDE.md, docs/ARCHITECTURE.md and this file on the PR #12 branch. Inspect latest PR and Actions logs before modifying anything. Continue at Stage III remaining work, item 1. Preserve production behavior and leave Tab Translator Pro untouched. Do not repeat completed experiments or claim mobile readiness from CI. Update this handoff with measured results as work progresses.

@@ -63,6 +63,20 @@ jobs:
           echo '1333aa4a748126703b2824286c6a38dd0774491f7b2ad9fb802eba190191946f  apps/web/dist/models/mobile.onnx' | sha256sum --check
           test "$(stat -c%s apps/web/dist/models/mobile.onnx)" = 143359115
 
+      # Stage IV low-memory candidate for the opt-in device test (docs/MOBILE-INFERENCE-DEVELOPMENT.md).
+      # Deterministic rebuild from the verified mobile.onnx; both files must match the SHA-256 pins in
+      # packages/core/src/models/mobile-experimental.ts, or the deploy fails.
+      - name: Generate verified Stage IV low-memory model
+        run: |
+          python -m venv /tmp/stage4 && /tmp/stage4/bin/pip install -q numpy==2.4.6 onnx==1.23.2 onnxruntime==1.32.0
+          mkdir -p /tmp/stage4-build
+          /tmp/stage4/bin/python scripts/mobile_graph.py apps/web/dist/models/mobile.onnx /tmp/stage4-build/candidate.onnx /tmp/stage4-build/graph-report.json > /dev/null
+          (cd /tmp/stage4-build && /tmp/stage4/bin/python "$GITHUB_WORKSPACE/scripts/mobile_memory.py" candidate.onnx candidate-memory.onnx memory-report.json --external-data --accurate-reductions --no-verify)
+          node --input-type=module -e "import('./packages/core/src/models/mobile-experimental.ts').then(({ MOBILE_STAGE4_CANDIDATE: c }) => { for (const f of [c.graph, c.data]) console.log(f.sha256 + '  /tmp/stage4-build/' + f.file); })" > /tmp/stage4-build/SHA256SUMS
+          cat /tmp/stage4-build/SHA256SUMS
+          sha256sum --check /tmp/stage4-build/SHA256SUMS
+          cp /tmp/stage4-build/candidate-memory.onnx /tmp/stage4-build/candidate-memory.onnx.data apps/web/dist/models/
+
       - name: Disable Jekyll
         run: touch apps/web/dist/.nojekyll
 

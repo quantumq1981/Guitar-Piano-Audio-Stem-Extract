@@ -1,4 +1,5 @@
 export * from './models/registry.ts';
+export * from './models/mobile-experimental.ts';
 export * from './dsp/chunking.ts';
 export * from './dsp/channels.ts';
 export * from './dsp/fft.ts';

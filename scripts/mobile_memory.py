@@ -699,6 +699,8 @@ def main():
                    help='replace Shape nodes by constants (lets WebGPU sessions initialise in Chromium). WARNING: '
                         'once shapes are static, ORT plans same-size buffer reuse and keeps dead encoder buffers '
                         'until the decoder reuses them: +1.3 GiB peak on CPU/WASM (measured). Not for WASM.')
+    p.add_argument('--no-verify', action='store_true',
+                   help='skip the second profile and the CPU parity runs (deploy builds that check pinned SHA-256s)')
     p.add_argument('--tolerance', type=float, default=0.0,
                    help='without --accurate-reductions: largest CPU max-abs difference accepted (default: bit-exact)')
     args = p.parse_args()
@@ -721,6 +723,11 @@ def main():
     report['candidateSha256'] = digest(args.candidate)
     if args.external_data:
         report['candidateDataSha256'] = digest(args.candidate + '.data')
+    if args.no_verify:
+        with open(args.report, 'w') as f:
+            json.dump(report, f, indent=2)
+        print(json.dumps({k: report[k] for k in ('candidateSha256', 'candidateDataSha256') if k in report}))
+        return
     after = Profile(args.candidate, feed)
     report['after'] = after.live_peak()
     report['operatorsAfter'] = dict(collections.Counter(n.op_type for n in model.graph.node))

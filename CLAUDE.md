@@ -29,6 +29,9 @@
 - Phone-only hosting: `deploy/oracle/` (primary; free Ampere A1 VM). `setup.sh` is idempotent: Node 22 (sha256-verified tarball), ffmpeg, Caddy + sslip.io TLS, systemd `stemsplit` on 127.0.0.1:8787 (`serve --host`), iptables 80/443. Users paste `cloud-init.sh` (curl | bash of main). Tested in an Ubuntu 24.04 container (x64, no systemd); not yet on real OCI/arm64.
 - `deploy/huggingface-space/` needs a PAID HF plan since July 2026 (free accounts: ZeroGPU Gradio only). PWA `create()` retries 502/503/504 while a sleeping host wakes.
 - Production builds without `VITE_API_BASE` have no server (`API_BASE === null`); server-routed jobs are disabled with an explanation.
+- Pages also serves experimental `models/mobile.onnx` and the Stage IV `models/candidate-memory.onnx` + `.data` (rebuilt in pages.yml,
+  deploy fails unless SHA-256 matches `MOBILE_STAGE4_CANDIDATE` in `packages/core/src/models/mobile-experimental.ts`). Device test:
+  experimental card → "Stage IV: load + N windows" (`apps/web/src/inference/mobile-stage4.worker.ts`). Not used for separation.
 
 ## Conventions / invariants
 - Node runs `.ts` directly (type stripping): **erasable syntax only** (no enums, namespaces, parameter properties); import with `.ts` extensions.

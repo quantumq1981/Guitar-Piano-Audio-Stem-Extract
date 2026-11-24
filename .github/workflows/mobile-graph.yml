@@ -12,7 +12,7 @@ permissions:
 jobs:
   graph:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -38,6 +38,27 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm install --no-save --package-lock=false playwright
       - run: npx playwright install --with-deps chromium
-      - name: Chromium WebGPU software adapter gate
-        timeout-minutes: 15
-        run: node scripts/mobile-webgpu-check.mjs
+      - name: Install isolated compatibility runtime
+        run: npm install --prefix ort-compat --no-save --package-lock=false onnxruntime-web@1.23.2
+      - name: Browser compatibility matrix
+        timeout-minutes: 60
+        run: |
+          set +e
+          passed=0
+          for pinned in 0 1; do
+            for provider in wasm webgpu; do
+              echo "::group::pinned=$pinned provider=$provider"
+              ORT_PINNED=$pinned ORT_PROVIDER=$provider timeout --kill-after=15s 12m node scripts/mobile-webgpu-check.mjs 2>&1 | tee "browser-$pinned-$provider.log"
+              code=${PIPESTATUS[0]}
+              echo "exit=$code" | tee -a "browser-$pinned-$provider.log"
+              if [ "$code" -eq 0 ]; then passed=1; fi
+              echo "::endgroup::"
+            done
+          done
+          test "$passed" -eq 1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-compatibility-results
+          path: browser-*.log
+          retention-days: 7

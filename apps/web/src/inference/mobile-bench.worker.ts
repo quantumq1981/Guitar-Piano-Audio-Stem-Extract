@@ -3,6 +3,7 @@ import * as ort from 'onnxruntime-web/webgpu';
 import { HTDEMUCS_6S_FOLDED_FP16W, requireIO } from '@stemsplit/core';
 declare const self: DedicatedWorkerGlobalScope;
 ort.env.wasm.numThreads = 1;
+ort.env.logLevel = 'warning';
 const report = (message: string) => self.postMessage({message});
 async function run(infer: boolean) {
   const model = HTDEMUCS_6S_FOLDED_FP16W;
@@ -14,13 +15,15 @@ async function run(infer: boolean) {
     report('Downloading verified model (143 MB)…');
     const response = await fetch(import.meta.env.BASE_URL + 'models/mobile.onnx');
     if (!response.ok) throw new Error('Model HTTP ' + response.status);
-    const bytes = await response.arrayBuffer();
+    let bytes: ArrayBuffer | null = await response.arrayBuffer();
+    report('Download complete; verifying SHA-256…');
     if (bytes.byteLength !== model.bytes) throw new Error('Incorrect model size');
     const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), b => b.toString(16).padStart(2, '0')).join('');
     if (hash !== model.sha256) throw new Error('Model checksum mismatch');
-    report('Integrity PASS; initializing WebGPU session…');
+    report('Integrity PASS; initializing WebGPU session (graph optimization disabled)…');
     const start = performance.now();
-    session = await ort.InferenceSession.create(new Uint8Array(bytes), {executionProviders: ['webgpu'], graphOptimizationLevel: 'all', enableMemPattern: false, enableCpuMemArena: false});
+    session = await ort.InferenceSession.create(new Uint8Array(bytes), {executionProviders: ['webgpu'], graphOptimizationLevel: 'disabled', enableMemPattern: false, enableCpuMemArena: false});
+    bytes = null;
     report('Session initialized: ' + ((performance.now()-start)/1000).toFixed(2) + ' s');
     if (infer) {
       report('Running one synthetic 7.8-second stereo window…');

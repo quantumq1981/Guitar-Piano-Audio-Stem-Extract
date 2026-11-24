@@ -18,7 +18,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install numpy onnx onnxruntime
+      - run: pip install numpy==2.4.6 onnx==1.23.2 onnxruntime==1.32.0
       - name: Retrieve exact previously tested model
         run: |
           curl --fail --location --retry 3 -o source.onnx https://quantumq1981.github.io/Guitar-Piano-Audio-Stem-Extract/models/mobile.onnx
@@ -40,25 +40,77 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - name: Install isolated compatibility runtime
         run: npm install --prefix ort-compat --no-save --package-lock=false onnxruntime-web@1.23.2
-      - name: Generate native CPU reference fixture
+      - name: Compare native source and candidate on the browser fixture
+        id: native-reference
         run: |
           python - <<'PY'
+          import hashlib
+          import json
+          import math
+
           import numpy as np
           import onnxruntime as ort
+
           t = np.arange(343980, dtype=np.float64) / 44100
           rng = np.random.default_rng(42)
           x = np.stack([0.08*np.sin(2*np.pi*440*t), 0.08*np.sin(2*np.pi*660*t)])[None]
           x = (x + 0.01*rng.standard_normal(x.shape)).astype('<f4')
+          x.tofile('reference-input.bin')
+
           opts = ort.SessionOptions()
           opts.enable_cpu_mem_arena = False
           opts.enable_mem_pattern = False
-          opts.intra_op_num_threads = 2
+          opts.intra_op_num_threads = 1
           opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
-          session = ort.InferenceSession('source.onnx', sess_options=opts, providers=['CPUExecutionProvider'])
-          y = session.run(['stems'], {'mix':x})[0]
-          assert y.shape == (1,6,2,343980) and np.isfinite(y).all()
-          x.tofile('reference-input.bin')
-          y.astype('<f4').tofile('reference-output.bin')
+
+          def reference(model):
+              session = ort.InferenceSession(f'{model}.onnx', sess_options=opts,
+                                             providers=['CPUExecutionProvider'])
+              output = session.run(['stems'], {'mix': x})[0]
+              if output.shape != (1, 6, 2, 343980) or not np.isfinite(output).all():
+                  raise ValueError(f'Invalid native {model} output shape or values')
+              output.astype('<f4', copy=False).tofile(f'reference-{model}.bin')
+              return output[0].astype(np.float64)
+
+          source = reference('source')
+          candidate = reference('candidate')
+          min_snr_db = 40
+          near_silent_rms = 1e-5
+
+          def metrics(signal, actual):
+              difference = actual - signal
+              signal_power = float(np.mean(np.square(signal)))
+              error_power = float(np.mean(np.square(difference)))
+              snr = math.inf if error_power == 0 else (
+                  10 * math.log10(signal_power / error_power) if signal_power else -math.inf)
+              reference_rms = math.sqrt(signal_power)
+              return {
+                  'referenceRms': reference_rms,
+                  'errorRms': math.sqrt(error_power),
+                  'maxAbs': float(np.max(np.abs(difference))),
+                  'snrDb': snr if math.isfinite(snr) else ('Infinity' if snr > 0 else '-Infinity'),
+                  'nearSilent': reference_rms < near_silent_rms,
+                  'pass': snr >= min_snr_db,
+              }
+
+          names = ['drums', 'bass', 'other', 'vocals', 'guitar', 'piano']
+          stems = [{'name': name, **metrics(source[i], candidate[i])} for i, name in enumerate(names)]
+          with open('candidate.onnx', 'rb') as model:
+              candidate_sha = hashlib.file_digest(model, 'sha256').hexdigest()
+          report = {
+              'runtime': ort.__version__,
+              'threads': opts.intra_op_num_threads,
+              'fixtureSha256': hashlib.sha256(x.tobytes()).hexdigest(),
+              'candidateSha256': candidate_sha,
+              'minSnrDb': min_snr_db,
+              'nearSilentRms': near_silent_rms,
+              'global': metrics(source, candidate),
+              'stems': stems,
+              'pass': all(stem['pass'] for stem in stems),
+          }
+          with open('browser-native-parity.json', 'w') as output:
+              print(json.dumps(report, indent=2, allow_nan=False), file=output)
+          print(json.dumps(report, allow_nan=False))
           PY
       - name: Browser compatibility matrix
         timeout-minutes: 60
@@ -76,14 +128,30 @@ jobs:
             done
           done
           test "$passed" -eq 1
-      - name: Pinned WASM repeated inference and numerical parity
-        timeout-minutes: 15
+      - name: Validate repeated inference and numerical parity for both WASM versions
+        if: ${{ !cancelled() && steps.native-reference.outcome == 'success' }}
+        timeout-minutes: 26
         run: |
-          set -o pipefail
-          ORT_PINNED=1 ORT_PROVIDER=wasm ORT_VALIDATE=1 timeout --kill-after=15s 12m node scripts/mobile-webgpu-check.mjs 2>&1 | tee browser-wasm-validation.log
+          set +e
+          failed=0
+          for pinned in 0 1; do
+            echo "::group::WASM parity pinned=$pinned"
+            ORT_PINNED=$pinned ORT_PROVIDER=wasm ORT_VALIDATE=1 timeout --kill-after=15s 12m node scripts/mobile-webgpu-check.mjs 2>&1 | tee "browser-wasm-validation-$pinned.log"
+            code=${PIPESTATUS[0]}
+            echo "exit=$code" | tee -a "browser-wasm-validation-$pinned.log"
+            if [ "$code" -ne 0 ]; then failed=1; fi
+            echo "::endgroup::"
+          done
+          if ! python -c 'import json, sys; sys.exit(not json.load(open("browser-native-parity.json"))["pass"])'; then
+            failed=1
+            echo "::error::Native source-to-candidate parity failed"
+          fi
+          exit "$failed"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: browser-compatibility-results
-          path: browser-*.log
+          path: |
+            browser-*.log
+            browser-native-parity.json
           retention-days: 7

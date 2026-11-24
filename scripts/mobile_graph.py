@@ -28,7 +28,7 @@ def prepare(src, dst):
     model = onnx.load(src)
     g = model.graph
     before = inventory(model)
-    # Only small integer tensors are eligible. Never evaluate weight Casts.
+    # Only small integer initializers are eligible. Floating constants must originate in ISTFT Constant nodes.
     constants = {}
     for t in g.initializer:
         if t.data_type in (onnx.TensorProto.INT32, onnx.TensorProto.INT64) and np.prod(t.dims) <= 4096:
@@ -48,7 +48,7 @@ def prepare(src, dst):
         try:
             if n.op_type == "Constant" and "value" in attrs:
                 t = attrs["value"]
-                if t.data_type in (onnx.TensorProto.INT32, onnx.TensorProto.INT64) and np.prod(t.dims) <= 4096:
+                if (t.data_type in (onnx.TensorProto.INT32, onnx.TensorProto.INT64) and np.prod(t.dims) <= 4096) or ("istft" in n.name.lower() and t.data_type in (onnx.TensorProto.FLOAT, onnx.TensorProto.FLOAT16, onnx.TensorProto.DOUBLE) and np.prod(t.dims) <= 2_000_000):
                     constants[n.output[0]] = numpy_helper.to_array(t)
                 continue
             if n.op_type == "Shape" and n.input[0] in shapes:
@@ -62,12 +62,27 @@ def prepare(src, dst):
                 value = ReferenceEvaluator(mini).run(None, {})[0]
         except (ValueError, TypeError, RuntimeError, IndexError, NotImplementedError):
             continue
-        if value is None or value.dtype not in (np.int32, np.int64) or value.size > 4096:
+        if value is None:
+            continue
+        integer = value.dtype in (np.int32, np.int64) and value.size <= 4096
+        floating = ("istft" in n.name.lower() and n.op_type != "Cast" and value.dtype in (np.float16, np.float32, np.float64) and value.size <= 2_000_000)
+        if not (integer or floating):
             continue
         constants[n.output[0]] = value
         replacement = helper.make_node("Constant", [], list(n.output), name=n.name + "_mobile_static", value=numpy_helper.from_array(value))
         g.node[i].CopyFrom(replacement)
         folded.append(n.name)
+    # Remove only unused pure nodes in this flat graph; preserve graph outputs.
+    if not any(a.type in (onnx.AttributeProto.GRAPH, onnx.AttributeProto.GRAPHS) for n in g.node for a in n.attribute):
+        live = {o.name for o in g.output}
+        keep = []
+        for n in reversed(g.node):
+            if any(o in live for o in n.output):
+                keep.append(n)
+                live.update(n.input)
+        kept = list(reversed(keep))
+        del g.node[:]
+        g.node.extend(kept)
     onnx.checker.check_model(model)
     onnx.save(model, dst)
     return {"before": before, "after": inventory(model), "folded": folded, "sha256": digest(dst)}

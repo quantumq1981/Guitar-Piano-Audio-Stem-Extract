@@ -89,21 +89,24 @@ def prepare(src, dst):
 
 def parity(src, dst):
     rng = np.random.default_rng(42)
-    x = (rng.standard_normal((1,2,343980)) * 0.1).astype(np.float32)
+    t = np.arange(343980, dtype=np.float32) / 44100
+    inputs = [(rng.standard_normal((1,2,343980)) * 0.1).astype(np.float32), np.stack([0.1*np.sin(2*np.pi*440*t), 0.1*np.sin(2*np.pi*660*t)])[None].astype(np.float32)]
     def run(path):
         opts = ort.SessionOptions()
         opts.enable_cpu_mem_arena = False
         opts.enable_mem_pattern = False
         opts.intra_op_num_threads = 2
         s = ort.InferenceSession(path, sess_options=opts, providers=["CPUExecutionProvider"])
-        return s.run(None, {s.get_inputs()[0].name: x})[0]
-    a, b = run(src), run(dst)
-    if a.shape != (1,6,2,343980) or a.shape != b.shape or not np.isfinite(b).all():
-        raise RuntimeError(f"Invalid output shape or values: {a.shape}, {b.shape}")
-    delta = float(np.max(np.abs(a-b)))
-    if not np.allclose(a,b,rtol=1e-4,atol=1e-5):
-        raise RuntimeError(f"Parity failed: max delta {delta}")
-    return delta
+        return [s.run(None, {s.get_inputs()[0].name: x})[0] for x in inputs]
+    deltas = []
+    for a, b in zip(run(src), run(dst)):
+        if a.shape != (1,6,2,343980) or a.shape != b.shape or not np.isfinite(b).all():
+            raise RuntimeError(f"Invalid output shape or values: {a.shape}, {b.shape}")
+        delta = float(np.max(np.abs(a-b)))
+        if not np.allclose(a,b,rtol=1e-4,atol=1e-5):
+            raise RuntimeError(f"Parity failed: max delta {delta}")
+        deltas.append(delta)
+    return max(deltas)
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()

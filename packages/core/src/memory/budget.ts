@@ -126,9 +126,13 @@ export interface ProjectionInput {
   readonly inputFrames: number;
   /** When false, the full decoded input is held in memory (no OPFS streaming). */
   readonly streamInput: boolean;
+  /** Full-length stereo output buffers retained by the browser client. */
+  readonly retainedOutputStems?: number;
+  /** Number of simultaneous full-track input copies. */
+  readonly inputCopies?: number;
 }
 
-export function projectPeakMemory({ model, ep, inputFrames, streamInput }: ProjectionInput): MemoryProjection {
+export function projectPeakMemory({ model, ep, inputFrames, streamInput, retainedOutputStems = 0, inputCopies = 1 }: ProjectionInput): MemoryProjection {
   if (model.bytes === null) throw new Error(`Model ${model.id} has no pinned size; cannot budget it`);
   const io = requireIO(model);
   const weightsBytes = model.bytes;
@@ -137,11 +141,12 @@ export function projectPeakMemory({ model, ep, inputFrames, streamInput }: Proje
 
   const ioTensors = (io.channels + io.stems.length * io.channels) * io.segmentFrames * 4;
   const accumulator = (io.stems.length * io.channels + 1) * io.segmentFrames * 4;
-  const decodedInput = streamInput ? io.channels * io.segmentFrames * 4 : io.channels * inputFrames * 4;
+  const decodedInput = streamInput ? io.channels * io.segmentFrames * 4 : io.channels * inputFrames * 4 * inputCopies;
+  const retainedOutput = retainedOutputStems * io.channels * inputFrames * 4;
 
   const sessionCreatePeakBytes = weightsBytes * copies.value;
   const inferencePeakBytes = weightsBytes + act.value + ioTensors;
-  const audioBuffersBytes = accumulator + decodedInput;
+  const audioBuffersBytes = accumulator + decodedInput + retainedOutput;
   return {
     ep,
     weightsBytes,

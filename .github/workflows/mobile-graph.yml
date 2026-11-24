@@ -5,13 +5,14 @@ on:
     branches: [main]
     paths:
       - 'scripts/mobile_graph.py'
+      - 'scripts/mobile-webgpu-check.mjs'
       - '.github/workflows/mobile-graph.yml'
 permissions:
   contents: read
 jobs:
   graph:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -31,3 +32,12 @@ jobs:
             candidate.onnx
             graph-report.json
           retention-days: 7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --no-audit --no-fund
+      - run: npm install --no-save --package-lock=false playwright
+      - run: npx playwright install --with-deps chromium
+      - name: Chromium WebGPU software adapter gate
+        timeout-minutes: 15
+        run: node scripts/mobile-webgpu-check.mjs

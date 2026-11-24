@@ -40,7 +40,18 @@ export async function runLocal(
   const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module", name: "stemsplit-inference" });
   const out: StemBuffers = new Map(wanted.filter((s) => s !== 'guitar_lead' && s !== 'guitar_rhythm').map((s) => [s, [new Float32Array(frames), new Float32Array(frames)]]));
   const send = (m: ToWorker, transfer: Transferable[] = []) => worker.postMessage(m, transfer);
-  const abort = (reason: string) => send({ type: 'abort', reason });
+  let abortTimer: ReturnType<typeof setTimeout> | undefined;
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
+  let fail: ((error: Error) => void) | undefined;
+  const abort = (reason: string) => {
+    if (abortTimer !== undefined) return;
+    send({ type: 'abort', reason });
+    abortTimer = setTimeout(() => fail?.(new LocalAbortError(reason)), 5000);
+  };
+  const heartbeat = () => {
+    clearTimeout(watchdog);
+    watchdog = setTimeout(() => fail?.(new Error('Inference worker stopped responding. Reload or retry with a shorter clip.')), 300_000);
+  };
 
   const onVisibility = () => {
     if (document.visibilityState === 'hidden') abort('the page was hidden (mobile browsers throttle background tabs)');
@@ -74,6 +85,8 @@ export async function runLocal(
 
   setCrashFlag({ startedAt: Date.now(), durationSec: frames / MODEL_SAMPLE_RATE, ep });
   const cleanup = () => {
+    clearTimeout(abortTimer);
+    clearTimeout(watchdog);
     document.removeEventListener('visibilitychange', onVisibility);
     battery?.removeEventListener('levelchange', onBattery);
     battery?.removeEventListener('chargingchange', onBattery);
@@ -82,7 +95,15 @@ export async function runLocal(
   };
 
   return new Promise<StemBuffers>((resolve, reject) => {
+    fail = (error) => {
+      if (error instanceof LocalAbortError) clearCrashFlag();
+      cleanup();
+      reject(error);
+    };
+    heartbeat();
+    worker.onmessageerror = () => fail?.(new Error('Inference worker message could not be decoded'));
     worker.onmessage = (e: MessageEvent<FromWorker>) => {
+      heartbeat();
       const m = e.data;
       switch (m.type) {
         case 'model-progress':

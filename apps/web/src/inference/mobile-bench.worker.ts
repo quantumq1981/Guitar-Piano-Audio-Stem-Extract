@@ -20,9 +20,9 @@ async function run(infer: boolean) {
     if (bytes.byteLength !== model.bytes) throw new Error('Incorrect model size');
     const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), b => b.toString(16).padStart(2, '0')).join('');
     if (hash !== model.sha256) throw new Error('Model checksum mismatch');
-    report('Integrity PASS; initializing WebGPU session (graph optimization disabled)…');
+    report('Integrity PASS; initializing WebGPU session (basic graph optimization)…');
     const start = performance.now();
-    session = await ort.InferenceSession.create(new Uint8Array(bytes), {executionProviders: ['webgpu'], graphOptimizationLevel: 'disabled', enableMemPattern: false, enableCpuMemArena: false});
+    session = await ort.InferenceSession.create(new Uint8Array(bytes), {executionProviders: ['webgpu'], graphOptimizationLevel: 'basic', enableMemPattern: false, enableCpuMemArena: false});
     bytes = null;
     report('Session initialized: ' + ((performance.now()-start)/1000).toFixed(2) + ' s');
     if (infer) {

@@ -33,7 +33,7 @@ export function MobileBenchmark({disabled, onBusy}: {disabled: boolean; onBusy: 
     if (infer && !initialized) return;
     if (!infer) setInitialized(false);
     log.current = '';
-    append('Starting low-memory benchmark…');
+    append('Starting provider compatibility benchmark (basic optimization)…');
     try {localStorage.setItem(KEY, String(Date.now()));} catch {}
     try {
       const w = new Worker(new URL('../inference/mobile-bench.worker.ts', import.meta.url), {type:'module', name:'mobile-benchmark'});
@@ -53,7 +53,7 @@ export function MobileBenchmark({disabled, onBusy}: {disabled: boolean; onBusy: 
   }
   return <section className="card">
     <h2>Experimental AI model test</h2>
-    <p>Low-memory initialization experiment: graph optimization disabled. Downloads 143 MB. No audio upload. This test may close the tab if memory is insufficient. Keep this page visible.</p>
+    <p>Provider compatibility experiment: basic graph optimization. Downloads 143 MB. No audio upload. Basic optimization can expand FP16 weights to FP32; this test may close the tab if memory is insufficient. Keep this page visible.</p>
     {interrupted && <><p>Previous test was interrupted. The last recorded stage is shown below. Retry only after closing other tabs.</p><button onClick={() => {try {localStorage.removeItem(KEY);} catch {} setInterrupted(false);}}>Acknowledge interruption</button></>}
     <button disabled={disabled || running || interrupted} onClick={() => start(false)}>Test model initialization</button>
     <button disabled={disabled || running || interrupted || !initialized} onClick={() => start(true)}>Test single-window inference</button>

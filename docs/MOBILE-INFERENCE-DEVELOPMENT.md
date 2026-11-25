@@ -196,6 +196,17 @@ Real app in headless Chromium (iPhone user agent, 390 px), 45 s of *D'Angelo –
 | 5 s mono file | 1 window, six stems, delete clears OPFS |
 | Run reloaded after window 1, then a retry with a simulated quota that fits the new stems only if the old ones are freed (1.4 MB free otherwise) | Before the fix: 9 MB of partial stems and no Delete control; the retry failed with "stems need 8 MB, 1 MB available". After: "Unfinished stems … (9 MB)" with Delete; the retry logged "Removed the previous stems (9 MB)" and finished. The finished stems were still playable after a reload, and Delete emptied OPFS. `navigator.storage.estimate()` reflected the removal immediately in Chromium. |
 
+**Safari Private Browsing blocks the song path [M].** The first iPhone attempt failed at once, before the model downloaded, with `UnknownError: The operation failed for an unknown transient reason (e.g. out of memory)` and a 0 MiB heap. The tab was a Private Browsing window. Reproduced in Playwright WebKit:
+
+| | Ephemeral session (as Private Browsing) | Persistent session (normal tab) |
+|---|---|---|
+| `navigator.storage.getDirectory()`, page and worker | that exact `UnknownError` | ok; sync access handle writes |
+| `navigator.storage.estimate()` | still reports a 1 GiB quota | 1 GiB |
+
+So the quota check cannot catch it. On load, the card now calls `getDirectory()`, which creates nothing. If storage is blocked, it explains why and disables the song controls; the Stage IV memory test needs no storage and stays available. The same real app in a persistent WebKit session (JavaScriptCore, Linux, 4 vCPU) separated a 5 s file end to end: session 5.6 s, window 19 s, heap 515 MiB reserved / 478 MiB touched, six stems.
+
+An in-memory fallback for private windows was not built. 24-bit stems are 1.6 MB per second of song (≈ 380 MB for 4 min) on top of the ≈ 616 MiB heap, which is too much for a phone tab.
+
 A capability gotcha that a first version shipped: `createSyncAccessHandle` exists only in dedicated workers, so checking `FileSystemFileHandle.prototype` on the page rejects every browser. The page checks only `navigator.storage.getDirectory`, and the worker checks for sync access.
 
 The time estimate shown before a run uses the iPhone's 12.5 s per window. A 4-min song is 41 windows, so about 9 min on that phone **[E]**; this has not yet been measured on a device.

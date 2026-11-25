@@ -36,6 +36,9 @@
   (`packages/core/src/codec/stem-wav-sink.ts`); main-app routing is unchanged (phones still go to the server). The page scans
   OPFS on load and after every run (`storedStem` = complete / partial / invalid from the header + size), so a stopped run's
   files can be deleted. It frees old stems BEFORE the quota check: otherwise a phone near its quota fails every retry.
+  Safari Private Browsing (WebKit ephemeral session) rejects `navigator.storage.getDirectory()` with UnknownError
+  "unknown transient reason (e.g. out of memory)" while `estimate()` still reports a 1 GiB quota. The card probes
+  `getDirectory()` on load and disables the song path with an explanation (measured in Playwright WebKit).
 
 ## Conventions / invariants
 - Node runs `.ts` directly (type stripping): **erasable syntax only** (no enums, namespaces, parameter properties); import with `.ts` extensions.

@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { MOBILE_STAGE4_CANDIDATE, WAV_HEADER_BYTES, planChunks, storedStem } from '@stemsplit/core';
+import { MOBILE_STAGE4_CANDIDATE, STAGE4_THREAD_OPTIONS, WAV_HEADER_BYTES, planChunks, stage4Threads, storedStem } from '@stemsplit/core';
 import { decodeForModel, probeDuration } from '../audio/decode.ts';
 import { STAGE4_STEM_BYTES_PER_SAMPLE, STAGE4_STEM_DIRECTORY, type Stage4Message, type Stage4Request } from '../inference/stage4-protocol.ts';
 const KEY = 'stemsplit.experimentalBenchmark';
+const THREADS_KEY = 'stemsplit.stage4Threads';
+function savedThreads(): number {
+  try {const t = Number(localStorage.getItem(THREADS_KEY)); return STAGE4_THREAD_OPTIONS.includes(t) ? t : 1;} catch {return 1;}
+}
 const LOG = 'stemsplit.experimentalBenchmarkLog';
 function savedLog(): string {try {return localStorage.getItem(LOG) ?? '';} catch {return '';}}
 type Test = {kind: 'webgpu'; infer: boolean} | {kind: 'stage4'; windows: number} | {kind: 'song'; file: File};
@@ -83,6 +87,13 @@ export function MobileBenchmark({disabled, onBusy}: {disabled: boolean; onBusy: 
   const [initialized, setInitialized] = useState(false);
   const [song, setSong] = useState<{file: File; seconds: number | null} | null>(null);
   const [stored, setStored] = useState<Stored | null>(null);
+  const threadEnv = {crossOriginIsolated: self.crossOriginIsolated, hardwareConcurrency: navigator.hardwareConcurrency};
+  const threadChoices = STAGE4_THREAD_OPTIONS.filter(t => stage4Threads(t, threadEnv) === t);
+  const [threads, setThreadsState] = useState(() => stage4Threads(savedThreads(), threadEnv));
+  function setThreads(t: number) {
+    setThreadsState(t);
+    try {localStorage.setItem(THREADS_KEY, String(t));} catch {}
+  }
   const [storageBlocked, setStorageBlocked] = useState<string | null>(null);
   // Scans finish asynchronously; a result is applied only if no newer scan or run started meanwhile.
   const scanGeneration = useRef(0);
@@ -126,7 +137,7 @@ export function MobileBenchmark({disabled, onBusy}: {disabled: boolean; onBusy: 
     void refreshStored();
   }
 
-  async function startSong(file: File, w: Worker) {
+  async function startSong(file: File, w: Worker, threads: number) {
     const problem = await storageProblem();
     if (problem) {setStorageBlocked(problem); throw new Error(problem);}
     // The worker replaces the stems too, but only after this quota check: free the old ones first.
@@ -144,7 +155,7 @@ export function MobileBenchmark({disabled, onBusy}: {disabled: boolean; onBusy: 
     const left = decoded.left.slice();
     const right = decoded.right.slice();
     append(`Decoded ${decoded.durationSec.toFixed(1)} s (${decoded.sourceChannels} channel${decoded.sourceChannels === 1 ? '' : 's'}) · stems will need ${mb(need)} on the device`);
-    const request: Stage4Request = {type: 'song', left, right};
+    const request: Stage4Request = {type: 'song', left, right, threads};
     w.postMessage(request, [left.buffer, right.buffer]);
   }
 
@@ -155,8 +166,9 @@ export function MobileBenchmark({disabled, onBusy}: {disabled: boolean; onBusy: 
     if (test.kind === 'webgpu' && !test.infer) setInitialized(false);
     if (test.kind === 'song') {scanGeneration.current++; setStored(null);}
     log.current = '';
-    append(test.kind === 'song' ? 'Starting on-device song separation (Stage IV, WASM)…'
-      : test.kind === 'stage4' ? `Starting Stage IV low-memory test (WASM, ${test.windows} windows)…`
+    const threadNote = `${threads} thread${threads === 1 ? '' : 's'}`;
+    append(test.kind === 'song' ? `Starting on-device song separation (Stage IV, WASM, ${threadNote})…`
+      : test.kind === 'stage4' ? `Starting Stage IV low-memory test (WASM, ${threadNote}, ${test.windows} windows)…`
       : 'Starting provider compatibility benchmark (basic optimization)…');
     try {localStorage.setItem(KEY, String(Date.now()));} catch {}
     // A hidden page stops the test, so keep the screen on while it runs (Safari 16.4+, Chromium).
@@ -177,8 +189,8 @@ export function MobileBenchmark({disabled, onBusy}: {disabled: boolean; onBusy: 
       };
       w.onerror = e => stop('Worker error: ' + e.message);
       w.onmessageerror = () => stop('Worker message error');
-      if (test.kind === 'song') startSong(test.file, w).catch(err => {if (worker.current === w) stop('FAIL: ' + String(err));});
-      else w.postMessage(test.kind === 'stage4' ? {type: 'test', windows: test.windows} satisfies Stage4Request : test.infer);
+      if (test.kind === 'song') startSong(test.file, w, threads).catch(err => {if (worker.current === w) stop('FAIL: ' + String(err));});
+      else w.postMessage(test.kind === 'stage4' ? {type: 'test', windows: test.windows, threads} satisfies Stage4Request : test.infer);
     } catch (e) {stop(String(e));}
   }
 
@@ -195,12 +207,18 @@ export function MobileBenchmark({disabled, onBusy}: {disabled: boolean; onBusy: 
   return <section className="card">
     <h2>Experimental AI model test</h2>
     <p><strong>Separate a song on this device (experimental).</strong> Runs the Stage IV six-stem model on WebAssembly with one thread. No upload: the song stays on this device. Downloads the {STAGE4_MB} MB model, then writes six 24-bit WAV stems to this browser's storage. Keep this page visible and the screen on until it finishes.</p>
+    <label className="threads">WASM threads (song and Stage IV tests){' '}
+      <select value={threads} disabled={blocked} onChange={e => setThreads(Number(e.target.value))}>
+        {threadChoices.map(t => <option key={t} value={t}>{t}</option>)}
+      </select>
+    </label>
+    {threadChoices.length === 1 && <p className="muted">More threads need a cross-origin isolated page and more than one core.</p>}
     {storageBlocked && <p className="warning">{storageBlocked}</p>}
     <label className="file">
       <input type="file" accept="audio/*,.mp3,.wav,.flac,.m4a,.aac,.ogg" disabled={blocked || storageBlocked !== null} onChange={e => void chooseSong(e.target.files?.[0] ?? null)} />
       <span>{song ? song.file.name : 'Choose a song'}</span>
     </label>
-    {song && <p>{song.seconds ? `${song.seconds.toFixed(0)} s · ${windows} windows · about ${Math.ceil((windows ?? 0) * IPHONE_SECONDS_PER_WINDOW / 60)} min on the iPhone tested (${IPHONE_SECONDS_PER_WINDOW} s per window)` : 'Reading duration…'}</p>}
+    {song && <p>{song.seconds ? `${song.seconds.toFixed(0)} s · ${windows} windows · about ${Math.ceil((windows ?? 0) * IPHONE_SECONDS_PER_WINDOW / 60)} min on the iPhone tested at 1 thread (${IPHONE_SECONDS_PER_WINDOW} s per window)` : 'Reading duration…'}</p>}
     <button disabled={blocked || !song || storageBlocked !== null} onClick={() => song && start({kind: 'song', file: song.file})}>Separate this song on this device</button>
     {stored && stored.stems.length > 0 && <ul className="stems">{stored.stems.map(s => <li key={s.name}>
       <strong>{s.name.replace(/\.wav$/, '')}</strong> <audio controls preload="none" src={s.url} /> <a href={s.url} download={`${song?.file.name.replace(/\.[^.]+$/, '') ?? 'song'} - ${s.name}`}>Download ({mb(s.bytes)})</a>

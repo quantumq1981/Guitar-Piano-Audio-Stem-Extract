@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 /**
  * Opt-in experiments with the Stage IV low-memory candidate (docs/MOBILE-INFERENCE-DEVELOPMENT.md): plain WASM
- * build, one thread, graph optimisation disabled, external weights, both files SHA-256 verified. Every stage is
+ * build, 1-4 threads (STAGE4_THREAD_OPTIONS), graph optimisation disabled, external weights, both files SHA-256 verified. Every stage is
  * reported with the WebAssembly heap, so a tab the OS kills still leaves the last measured stage in the log.
  *
  *  - `test`: N synthetic windows (memory, speed, repeatability).
@@ -16,6 +16,7 @@ import {
   planChunks,
   separate,
   stage4TestSignal,
+  stage4Threads,
   touchedBytes,
   wavStemSink,
   WASM_CAP_LADDER_PAGES,
@@ -74,18 +75,20 @@ async function fetchVerified(file: PinnedFile): Promise<Uint8Array> {
 type Ort = typeof import('onnxruntime-web/wasm');
 type Session = Awaited<ReturnType<Ort['InferenceSession']['create']>>;
 
-async function openSession(): Promise<{ ort: Ort; session: Session }> {
+async function openSession(requestedThreads: number): Promise<{ ort: Ort; session: Session }> {
   const c = MOBILE_STAGE4_CANDIDATE;
+  const threads = stage4Threads(requestedThreads, { crossOriginIsolated: self.crossOriginIsolated, hardwareConcurrency: navigator.hardwareConcurrency });
   report(`Environment: ${navigator.userAgent} · crossOriginIsolated ${String(self.crossOriginIsolated)} · ${navigator.hardwareConcurrency} cores`);
   report(`Downloading Stage IV model (${mib(c.graph.bytes + c.data.bytes)}, two files)…`);
   let graph: Uint8Array | null = await fetchVerified(c.graph);
   let data: Uint8Array | null = await fetchVerified(c.data);
   report('Integrity PASS (graph + weights); loading ONNX Runtime WASM…');
   const ort = await import('onnxruntime-web/wasm');
-  ort.env.wasm.numThreads = c.session.numThreads;
+  ort.env.wasm.numThreads = threads;
   ort.env.wasm.proxy = false;
   ort.env.logLevel = 'warning';
-  report(`Creating session (ORT ${ort.env.versions.web ?? '?'}, WASM, 1 thread, graph optimisation disabled)…`);
+  const reduced = threads < requestedThreads ? ` (${requestedThreads} requested; ${self.crossOriginIsolated ? `${navigator.hardwareConcurrency} cores` : 'page not cross-origin isolated'})` : '';
+  report(`Creating session (ORT ${ort.env.versions.web ?? '?'}, WASM, ${threads} thread${threads === 1 ? '' : 's'}${reduced}, graph optimisation disabled)…`);
   const start = performance.now();
   const session = await ort.InferenceSession.create(graph, {
     executionProviders: ['wasm'],
@@ -121,8 +124,8 @@ function runner(ort: Ort, session: Session): SegmentRunner {
   };
 }
 
-async function runTest(windows: number): Promise<void> {
-  const { ort, session } = await openSession();
+async function runTest(windows: number, threads: number): Promise<void> {
+  const { ort, session } = await openSession(threads);
   try {
     const { segmentFrames, channels } = MOBILE_STAGE4_CANDIDATE.io;
     const run = runner(ort, session);
@@ -145,7 +148,7 @@ async function runTest(windows: number): Promise<void> {
   post({ done: true, message: 'Stage IV test complete' });
 }
 
-async function runSong(left: Float32Array, right: Float32Array): Promise<void> {
+async function runSong(left: Float32Array, right: Float32Array, threads: number): Promise<void> {
   const { io } = MOBILE_STAGE4_CANDIDATE;
   const plan = planChunks(left.length, io.segmentFrames);
   report(`Song: ${(left.length / io.sampleRate).toFixed(1)} s · ${plan.chunks.length} windows · stems stream to on-device storage as 24-bit WAV`);
@@ -160,7 +163,7 @@ async function runSong(left: Float32Array, right: Float32Array): Promise<void> {
   const dir = await root.getDirectoryHandle(STAGE4_STEM_DIRECTORY, { create: true });
   const files = io.stems.map((stem) => `${stem}.wav`);
   const handles = await Promise.all(files.map(async (name) => (await dir.getFileHandle(name, { create: true })).createSyncAccessHandle()));
-  const { ort, session } = await openSession();
+  const { ort, session } = await openSession(threads);
   try {
     const sink = wavStemSink(io.stems.length, left.length, { sampleRate: io.sampleRate, channels: io.channels, sampleFormat: STAGE4_STEM_SAMPLE_FORMAT },
       (stem, offset, bytes) => {
@@ -186,7 +189,7 @@ async function runSong(left: Float32Array, right: Float32Array): Promise<void> {
 if (!self.name.startsWith('em-pthread')) {
   self.onmessage = (e: MessageEvent<Stage4Request>) => {
     const msg = e.data;
-    const job = msg.type === 'song' ? runSong(msg.left, msg.right) : runTest(Math.max(1, Math.min(5, msg.windows)));
+    const job = msg.type === 'song' ? runSong(msg.left, msg.right, msg.threads) : runTest(Math.max(1, Math.min(5, msg.windows)), msg.threads);
     job.catch((error: unknown) => post({ done: true, message: `FAIL: ${String(error)} · ${heap()}` }));
   };
 }

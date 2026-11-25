@@ -4,6 +4,8 @@ import {
   HTDEMUCS_6S_FOLDED_FP16W,
   maxAbsDifference,
   MOBILE_STAGE4_CANDIDATE,
+  STAGE4_THREAD_OPTIONS,
+  stage4Threads,
   MODEL_REGISTRY,
   stage4TestSignal,
   touchedBytes,
@@ -89,5 +91,34 @@ describe('maxAbsDifference', () => {
   it('reports the largest gap and Infinity for a length mismatch', () => {
     expect(maxAbsDifference([1, 2, 3], [1, 2.5, 3])).toBe(0.5);
     expect(maxAbsDifference([1], [1, 2])).toBe(Infinity);
+  });
+});
+
+describe('stage4Threads', () => {
+  const isolated = { crossOriginIsolated: true, hardwareConcurrency: 4 };
+
+  it('uses the requested count on an isolated page with enough cores', () => {
+    for (const t of STAGE4_THREAD_OPTIONS) expect(stage4Threads(t, isolated)).toBe(t);
+  });
+
+  it('falls back to one thread without cross-origin isolation (no SharedArrayBuffer)', () => {
+    expect(stage4Threads(4, { crossOriginIsolated: false, hardwareConcurrency: 8 })).toBe(1);
+  });
+
+  it('never asks for more threads than the reported cores', () => {
+    expect(stage4Threads(4, { crossOriginIsolated: true, hardwareConcurrency: 2 })).toBe(2);
+    expect(stage4Threads(4, { crossOriginIsolated: true, hardwareConcurrency: 2.5 })).toBe(2);
+    expect(stage4Threads(4, { crossOriginIsolated: true })).toBe(4); // unknown core count: no cap
+    expect(stage4Threads(4, { crossOriginIsolated: true, hardwareConcurrency: 0 })).toBe(4);
+  });
+
+  it('treats invalid requests as one thread and rounds fractions down', () => {
+    for (const bad of [0, -2, Number.NaN, Number.POSITIVE_INFINITY]) expect(stage4Threads(bad, isolated)).toBe(1);
+    expect(stage4Threads(2.9, isolated)).toBe(2);
+  });
+
+  it('offers only counts that start from one and stay within a phone', () => {
+    expect(STAGE4_THREAD_OPTIONS[0]).toBe(1);
+    expect(Math.max(...STAGE4_THREAD_OPTIONS)).toBeLessThanOrEqual(4);
   });
 });

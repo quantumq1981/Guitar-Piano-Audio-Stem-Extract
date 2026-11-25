@@ -23,7 +23,8 @@ export interface ExternalDataArtifact {
   readonly data: PinnedFile;
   readonly io: ModelIO;
   /** ORT session settings the artifact was validated with. Graph optimisation must stay disabled: constant
-   * folding would make shapes static and re-enable ORT's buffer-reuse planning (+1.3 GiB, measured). */
+   * folding would make shapes static and re-enable ORT's buffer-reuse planning (+1.3 GiB, measured).
+   * `numThreads` is the default; see STAGE4_THREAD_OPTIONS for the validated alternatives. */
   readonly session: {
     readonly graphOptimizationLevel: 'disabled';
     readonly enableMemPattern: false;
@@ -48,6 +49,28 @@ export const MOBILE_STAGE4_CANDIDATE: ExternalDataArtifact = {
   io: requireIO(HTDEMUCS_6S_FOLDED_FP16W),
   session: { graphOptimizationLevel: 'disabled', enableMemPattern: false, enableCpuMemArena: false, numThreads: 1 },
 };
+
+/**
+ * WASM thread counts the experimental card offers. Measured in Chromium (4 vCPU, music fixture, ORT 1.31.1):
+ * parity is unchanged by threading (minimum 84.1 dB per stem vs native at 1, 2 and 4 threads, repeats
+ * bit-identical); one window takes 18.0 / 9.7–10.0 / 5.5–6.8 s; the heap is 515 / 515 / 618 MiB.
+ */
+export const STAGE4_THREAD_OPTIONS: readonly number[] = [1, 2, 4];
+
+export interface ThreadEnvironment {
+  /** ORT's WASM threads share memory, which needs SharedArrayBuffer and so a cross-origin isolated page. */
+  readonly crossOriginIsolated: boolean;
+  /** `navigator.hardwareConcurrency`; absent or invalid means unknown. */
+  readonly hardwareConcurrency?: number;
+}
+
+/** Threads to actually use for `requested`: 1 unless the page is isolated, and never more than the reported cores. */
+export function stage4Threads(requested: number, env: ThreadEnvironment): number {
+  if (!Number.isFinite(requested) || requested < 1 || !env.crossOriginIsolated) return 1;
+  const cores = env.hardwareConcurrency;
+  const limit = cores !== undefined && Number.isFinite(cores) && cores >= 1 ? Math.floor(cores) : Infinity;
+  return Math.max(1, Math.min(Math.floor(requested), limit));
+}
 
 /** One WebAssembly page is 64 KiB. */
 export const WASM_PAGE_BYTES = 65_536;

@@ -39,6 +39,9 @@
   Safari Private Browsing (WebKit ephemeral session) rejects `navigator.storage.getDirectory()` with UnknownError
   "unknown transient reason (e.g. out of memory)" while `estimate()` still reports a 1 GiB quota. The card probes
   `getDirectory()` on load and disables the song path with an explanation (measured in Playwright WebKit).
+- The card's WASM threads selector (1/2/4, `STAGE4_THREAD_OPTIONS`, default 1; `stage4Threads()` drops to 1 without
+  cross-origin isolation and caps at `hardwareConcurrency`). Measured: identical parity at every count; window time on
+  4 vCPU 18.0 / 10.1 / 5.7 s (Chromium app) and 17.5 / 9.0 / 5.7 s (WebKit app), touched heap 476-539 MiB.
 
 ## Conventions / invariants
 - Node runs `.ts` directly (type stripping): **erasable syntax only** (no enums, namespaces, parameter properties); import with `.ts` extensions.
@@ -65,7 +68,8 @@ session 2.9-3.9 s, 11.9-12.9 s per 7.8 s window (1 thread), WASM heap 616 MiB / 
 On-device full-song separation built in the experimental card (Chromium: memory flat over a 45 s song, browser WAV24
 vs native >= 85.6 dB per stem). **First full song on the iPhone passed (2026-11-25, normal tab):** 43.2 s, 8 windows,
 3:05, heap 616 / touched 508-510 MiB flat, six 24-bit stems played from OPFS. That run took ~23 s per window with Low Power
-Mode on (owner confirmed; the window test did 12-13 s). Next: speed baseline with Low Power Mode off, a 4-min song, then threads.
+Mode on (owner confirmed; the window test did 12-13 s). Threads built (selector, verified in Chromium + WebKit).
+Next: iPhone speed baseline (Low Power Mode off), 2/4 threads on the iPhone, a 4-min song; then choose the default.
 
 ## Status (2026-11-23)
 Done: core + tests (67), server pipeline/API/CLI verified on real tracks (RTF ≈ 0.63, 4 vCPU), PWA builds and runs

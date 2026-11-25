@@ -48,3 +48,5 @@ input[type='range'] { width: 100%; accent-color: var(--accent); }
 .stems { list-style: none; padding: 0; margin: 0.5rem 0; }
 .stems li { display: grid; gap: 0.25rem; margin: 0.75rem 0; }
 .stems audio { width: 100%; }
+.threads { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.threads select { font: inherit; color: var(--text); background: #2a2e36; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; min-height: 40px; min-width: 64px; }

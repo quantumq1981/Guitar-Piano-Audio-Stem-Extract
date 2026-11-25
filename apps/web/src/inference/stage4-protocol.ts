@@ -1,8 +1,9 @@
 /** Messages between the experimental benchmark card and mobile-stage4.worker.ts. */
+/** `threads`: requested WASM threads; the worker reduces it with stage4Threads() (isolation, core count). */
 export type Stage4Request =
-  | { readonly type: 'test'; readonly windows: number }
+  | { readonly type: 'test'; readonly windows: number; readonly threads: number }
   /** Planar stereo at the model rate; both buffers are transferred. */
-  | { readonly type: 'song'; readonly left: Float32Array; readonly right: Float32Array };
+  | { readonly type: 'song'; readonly left: Float32Array; readonly right: Float32Array; readonly threads: number };
 
 export interface Stage4Message {
   readonly message: string;

@@ -196,15 +196,41 @@ Real app in headless Chromium (iPhone user agent, 390 px), 45 s of *D'Angelo –
 | 5 s mono file | 1 window, six stems, delete clears OPFS |
 | Run reloaded after window 1, then a retry with a simulated quota that fits the new stems only if the old ones are freed (1.4 MB free otherwise) | Before the fix: 9 MB of partial stems and no Delete control; the retry failed with "stems need 8 MB, 1 MB available". After: "Unfinished stems … (9 MB)" with Delete; the retry logged "Removed the previous stems (9 MB)" and finished. The finished stems were still playable after a reload, and Delete emptied OPFS. `navigator.storage.estimate()` reflected the removal immediately in Chromium. |
 
+**Safari Private Browsing blocks the song path [M].** The first iPhone attempt failed at once, before the model downloaded, with `UnknownError: The operation failed for an unknown transient reason (e.g. out of memory)` and a 0 MiB heap. The tab was a Private Browsing window. Reproduced in Playwright WebKit:
+
+| | Ephemeral session (as Private Browsing) | Persistent session (normal tab) |
+|---|---|---|
+| `navigator.storage.getDirectory()`, page and worker | that exact `UnknownError` | ok; sync access handle writes |
+| `navigator.storage.estimate()` | still reports a 1 GiB quota | 1 GiB |
+
+So the quota check cannot catch it. On load, the card now calls `getDirectory()`, which creates nothing. If storage is blocked, it explains why and disables the song controls; the Stage IV memory test needs no storage and stays available. The same real app in a persistent WebKit session (JavaScriptCore, Linux, 4 vCPU) separated a 5 s file end to end: session 5.6 s, window 19 s, heap 515 MiB reserved / 478 MiB touched, six stems.
+
+An in-memory fallback for private windows was not built. 24-bit stems are 1.6 MB per second of song (≈ 380 MB for 4 min) on top of the ≈ 616 MiB heap, which is too much for a phone tab.
+
 A capability gotcha that a first version shipped: `createSyncAccessHandle` exists only in dedicated workers, so checking `FileSystemFileHandle.prototype` on the page rejects every browser. The page checks only `navigator.storage.getDirectory`, and the worker checks for sync access.
 
-The time estimate shown before a run uses the iPhone's 12.5 s per window. A 4-min song is 41 windows, so about 9 min on that phone **[E]**; this has not yet been measured on a device.
+The time estimate shown before a run uses the iPhone's 12.5 s per window. A 4-min song is 41 windows, so about 9 min on that phone **[E]**.
+
+### First full song on a physical iPhone — 2026-11-25 **[M]**
+The owner ran the song test in a normal Safari tab, after the private-window failure above. These numbers come from the on-screen log.
+
+| | Result |
+|---|---|
+| Song | 43.2 s m4a (0.7 MB), 2 channels, 8 windows |
+| Total | 3:05 from the first window to the last, 4.3× the song length |
+| Per window | 22.2–23.4 s (windows 3→8), and 70 s for the first three; steady from the start |
+| WASM heap | 616 MiB reserved, 508–510 MiB touched, flat over windows 3–8. Same as the window test. |
+| Output | 1,905,367 frames, 6 × 11 MiB 24-bit WAV (69 MB), no clipping; played from OPFS in Safari |
+
+**Speed:** about 23 s per window is ≈ 1.8× the window test's 11.9–12.9 s. The time is constant from window 1, which does not fit thermal throttling, since that would build up over the run. **Low Power Mode was on (confirmed by the owner)**, and it lowers CPU speed, so it is the likely cause. Treat this run as the Low Power Mode figure: ≈ 4.3× the song length, ≈ 17 min for 4 min of audio **[E]**. A rerun with Low Power Mode off gives the normal baseline.
+
+The Safari version was not in the screenshots.
 
 ## Stage IV — remaining work (in order)
 1. ~~Physical iPhone: session create, one window, repeated windows~~ **done 2026-11-24 (above).** Still to test: other iPhones/iPads (old iOS → ORT 1.23.2) and Android Chrome. Read `[stems …]`-style labels from the start: record ORT version, Safari version and touched heap. The WASM path should stay on the pinned 1.23.2 plain build, because of microsoft/onnxruntime#33426 (JSC on Safari < 17.5; see Tab Translator Pro `stem-model-core.js`).
 2. App integration behind the experimental benchmark (Stage III item 3). The worker loads graph + `.data` with `externalData`, each file SHA-256-verified and cached, and drops its reference to the data buffer after `create()`. Use one thread, graph optimisation disabled, a verified cache, transferable buffers, cancellation, crash marker and worker termination. The registry needs two pinned hashes (graph + data).
 3. Further exact memory cuts. Chunk the frequency-branch DConv along its 512-row batch (every op there is per row; replace constant batch dims in Reshape targets with 0). Run the ISTFT tail per source (batch 12 → 2). Both remove 63 MiB tensors, the new peak.
-4. Full tracks: **built** (experimental card, above; Chromium-verified). Next: a full song on the iPhone, then threads. Original note: one session reused across windows (touched memory 479–510 MiB over 3 windows on the iPhone). Store stems without holding six float32 copies of the song, which is 508 MB for 4 min stereo: Int16 (254 MB, validate quantisation) or OPFS streaming (≈ 0). Recycle the worker if the heap creeps. Then try 2–4 threads for speed, since the device reported crossOriginIsolated true and 4 cores.
+4. Full tracks: **built**, and the first physical-iPhone song passed (43.2 s, memory flat, above). Next: rerun with Low Power Mode off for the speed baseline, a 4-min song (≈ 41 windows, ≈ 380 MB of stems), then threads. Original note: one session reused across windows (touched memory 479–510 MiB over 3 windows on the iPhone). Store stems without holding six float32 copies of the song, which is 508 MB for 4 min stereo: Int16 (254 MB, validate quantisation) or OPFS streaming (≈ 0). Recycle the worker if the heap creeps. Then try 2–4 threads for speed, since the device reported crossOriginIsolated true and 4 cores.
 5. WebGPU variant: static shapes, plus a shader-f16 device or fp32 weights for SwiftShader, plus GPU-process memory measurement on iOS.
 6. Promotion rule unchanged: one artifact on every tier, parity ≥ 40 dB per stem (now on the music fixture), `npm test`, `npm run typecheck`, `npm run build:web`, licences and musical quality before production.
 

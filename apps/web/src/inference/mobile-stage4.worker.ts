@@ -152,7 +152,10 @@ async function runSong(left: Float32Array, right: Float32Array): Promise<void> {
   if (typeof FileSystemFileHandle === 'undefined' || !('createSyncAccessHandle' in FileSystemFileHandle.prototype)) {
     throw new Error('This browser cannot write files from a worker (OPFS sync access handles are missing)');
   }
-  const root = await navigator.storage.getDirectory();
+  // Safari Private Browsing rejects this with UnknownError ("unknown transient reason (e.g. out of memory)").
+  const root = await navigator.storage.getDirectory().catch((error: unknown) => {
+    throw new Error(`On-device storage is blocked in this window (${String(error).replace(/\.$/, '')}); Safari does this in Private Browsing`);
+  });
   await root.removeEntry(STAGE4_STEM_DIRECTORY, { recursive: true }).catch(() => {});
   const dir = await root.getDirectoryHandle(STAGE4_STEM_DIRECTORY, { create: true });
   const files = io.stems.map((stem) => `${stem}.wav`);

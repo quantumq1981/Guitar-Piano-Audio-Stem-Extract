@@ -36,6 +36,9 @@
   (`packages/core/src/codec/stem-wav-sink.ts`); main-app routing is unchanged (phones still go to the server). The page scans
   OPFS on load and after every run (`storedStem` = complete / partial / invalid from the header + size), so a stopped run's
   files can be deleted. It frees old stems BEFORE the quota check: otherwise a phone near its quota fails every retry.
+  Safari Private Browsing (WebKit ephemeral session) rejects `navigator.storage.getDirectory()` with UnknownError
+  "unknown transient reason (e.g. out of memory)" while `estimate()` still reports a 1 GiB quota. The card probes
+  `getDirectory()` on load and disables the song path with an explanation (measured in Playwright WebKit).
 
 ## Conventions / invariants
 - Node runs `.ts` directly (type stripping): **erasable syntax only** (no enums, namespaces, parameter properties); import with `.ts` extensions.
@@ -60,7 +63,9 @@ Mobile Stage IV (stacked on PR #12, experimental): exact rewrites + two-level re
 initialise in Chromium with static shapes (inference needs shader-f16). **Physical iPhone (Safari 27.2) passed** the hosted test:
 session 2.9-3.9 s, 11.9-12.9 s per 7.8 s window (1 thread), WASM heap 616 MiB / touched 510 MiB, repeats bit-identical.
 On-device full-song separation built in the experimental card (Chromium: memory flat over a 45 s song, browser WAV24
-vs native >= 85.6 dB per stem). Next: full song on the iPhone, then threads, other devices.
+vs native >= 85.6 dB per stem). **First full song on the iPhone passed (2026-11-25, normal tab):** 43.2 s, 8 windows,
+3:05, heap 616 / touched 508-510 MiB flat, six 24-bit stems played from OPFS. That run took ~23 s per window with Low Power
+Mode on (owner confirmed; the window test did 12-13 s). Next: speed baseline with Low Power Mode off, a 4-min song, then threads.
 
 ## Status (2026-11-23)
 Done: core + tests (67), server pipeline/API/CLI verified on real tracks (RTF ≈ 0.63, 4 vCPU), PWA builds and runs

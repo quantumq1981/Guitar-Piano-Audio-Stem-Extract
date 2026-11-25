@@ -18,6 +18,23 @@ const windowsFor = (seconds: number) => planChunks(Math.max(1, Math.round(second
 // Sync access handles exist only inside dedicated workers, so the page can check for OPFS itself; the worker
 // checks for createSyncAccessHandle before writing.
 const opfsAvailable = () => typeof navigator.storage?.getDirectory === 'function';
+
+/**
+ * Why this window cannot store the stems, or null if it can. getDirectory() alone creates nothing. Measured in WebKit:
+ * an ephemeral session (what Safari Private Browsing uses) rejects it with "UnknownError: The operation failed for an
+ * unknown transient reason (e.g. out of memory)" on the page and in workers, while storage.estimate() still reports a
+ * 1 GiB quota, so the quota check alone does not catch it.
+ */
+async function storageProblem(): Promise<string | null> {
+  if (!opfsAvailable()) return 'This browser has no origin-private file system (OPFS), which the song test needs to store the stems.';
+  try {
+    await navigator.storage.getDirectory();
+    return null;
+  } catch (err) {
+    return `This window cannot store files on the device (${String(err).replace(/\.$/, '')}). Safari blocks this storage in Private Browsing: ` +
+      'open the page in a normal tab to separate a song. The Stage IV memory test below still works here.';
+  }
+}
 const STEM_FILES = IO.stems.map(stem => `${stem}.wav`);
 const mb = (bytes: number) => `${(bytes / 1e6).toFixed(0)} MB`;
 
@@ -66,6 +83,7 @@ export function MobileBenchmark({disabled, onBusy}: {disabled: boolean; onBusy: 
   const [initialized, setInitialized] = useState(false);
   const [song, setSong] = useState<{file: File; seconds: number | null} | null>(null);
   const [stored, setStored] = useState<Stored | null>(null);
+  const [storageBlocked, setStorageBlocked] = useState<string | null>(null);
   // Scans finish asynchronously; a result is applied only if no newer scan or run started meanwhile.
   const scanGeneration = useRef(0);
   async function refreshStored() {
@@ -93,6 +111,7 @@ export function MobileBenchmark({disabled, onBusy}: {disabled: boolean; onBusy: 
     const hide = () => {if (document.hidden && worker.current) stop('Stopped: page hidden');};
     document.addEventListener('visibilitychange', hide);
     void refreshStored(); // stems left by a run before a reload or a killed tab
+    void storageProblem().then(setStorageBlocked);
     return () => {document.removeEventListener('visibilitychange', hide); worker.current?.terminate(); clearTimeout(timer.current);};
   }, []);
   useEffect(() => () => {for (const s of stored?.stems ?? []) URL.revokeObjectURL(s.url);}, [stored]);
@@ -108,7 +127,8 @@ export function MobileBenchmark({disabled, onBusy}: {disabled: boolean; onBusy: 
   }
 
   async function startSong(file: File, w: Worker) {
-    if (!opfsAvailable()) throw new Error('This browser has no origin-private file system (OPFS), needed to store the stems');
+    const problem = await storageProblem();
+    if (problem) {setStorageBlocked(problem); throw new Error(problem);}
     // The worker replaces the stems too, but only after this quota check: free the old ones first.
     const freed = await removeStored();
     if (freed > 0) append(`Removed the previous stems (${mb(freed)}) to make room`);
@@ -175,12 +195,13 @@ export function MobileBenchmark({disabled, onBusy}: {disabled: boolean; onBusy: 
   return <section className="card">
     <h2>Experimental AI model test</h2>
     <p><strong>Separate a song on this device (experimental).</strong> Runs the Stage IV six-stem model on WebAssembly with one thread. No upload: the song stays on this device. Downloads the {STAGE4_MB} MB model, then writes six 24-bit WAV stems to this browser's storage. Keep this page visible and the screen on until it finishes.</p>
+    {storageBlocked && <p className="warning">{storageBlocked}</p>}
     <label className="file">
-      <input type="file" accept="audio/*,.mp3,.wav,.flac,.m4a,.aac,.ogg" disabled={blocked} onChange={e => void chooseSong(e.target.files?.[0] ?? null)} />
+      <input type="file" accept="audio/*,.mp3,.wav,.flac,.m4a,.aac,.ogg" disabled={blocked || storageBlocked !== null} onChange={e => void chooseSong(e.target.files?.[0] ?? null)} />
       <span>{song ? song.file.name : 'Choose a song'}</span>
     </label>
     {song && <p>{song.seconds ? `${song.seconds.toFixed(0)} s · ${windows} windows · about ${Math.ceil((windows ?? 0) * IPHONE_SECONDS_PER_WINDOW / 60)} min on the iPhone tested (${IPHONE_SECONDS_PER_WINDOW} s per window)` : 'Reading duration…'}</p>}
-    <button disabled={blocked || !song} onClick={() => song && start({kind: 'song', file: song.file})}>Separate this song on this device</button>
+    <button disabled={blocked || !song || storageBlocked !== null} onClick={() => song && start({kind: 'song', file: song.file})}>Separate this song on this device</button>
     {stored && stored.stems.length > 0 && <ul className="stems">{stored.stems.map(s => <li key={s.name}>
       <strong>{s.name.replace(/\.wav$/, '')}</strong> <audio controls preload="none" src={s.url} /> <a href={s.url} download={`${song?.file.name.replace(/\.[^.]+$/, '') ?? 'song'} - ${s.name}`}>Download ({mb(s.bytes)})</a>
     </li>)}</ul>}

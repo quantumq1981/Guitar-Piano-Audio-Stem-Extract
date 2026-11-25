@@ -41,11 +41,20 @@ for (let s = 0; s < Number(segs); s++) {
   io.stems.forEach((stem, i) => {
     const refStem = a.subarray(i * 2 * n, (i + 1) * 2 * n);
     const v = snrDb(refStem, b.subarray(i * 2 * n, (i + 1) * 2 * n));
-    if (v < (worst.get(stem)?.snr ?? Infinity)) worst.set(stem, { snr: v, levelDb: 10 * Math.log10(energy(refStem) / mixEnergy) });
+    const prev = worst.get(stem);
+    // NaN (non-finite model output) is the worst possible result: it is kept, and never replaced by a finite window.
+    if (prev === undefined || (!Number.isNaN(prev.snr) && (Number.isNaN(v) || v < prev.snr))) {
+      worst.set(stem, { snr: v, levelDb: 10 * Math.log10(energy(refStem) / mixEnergy) });
+    }
   });
 }
 for (const [stem, w] of worst) {
   // Error level re mix = stem level − SNR: the absolute size of the difference, independent of how quiet the stem is.
   console.log(`${stem.padEnd(8)} worst-segment SNR ${w.snr.toFixed(1)} dB (reference stem ${w.levelDb.toFixed(1)} dB re mix, ` +
     `error ${(w.levelDb - w.snr).toFixed(1)} dB re mix)`);
+}
+const invalid = [...worst].filter(([, w]) => Number.isNaN(w.snr)).map(([stem]) => stem);
+if (invalid.length > 0) {
+  console.error(`INVALID: non-finite candidate output on ${invalid.join(', ')}`);
+  process.exitCode = 1;
 }

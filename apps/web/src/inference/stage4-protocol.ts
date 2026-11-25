@@ -7,8 +7,6 @@ export type Stage4Request =
 export interface Stage4Message {
   readonly message: string;
   readonly done?: boolean;
-  /** On a completed song: stem file names inside STAGE4_STEM_DIRECTORY (OPFS root). */
-  readonly files?: readonly string[];
 }
 
 /** Stem files are 24-bit PCM WAV, as the server exports by default: 16-bit measurably limited quiet stems
@@ -16,5 +14,6 @@ export interface Stage4Message {
 export const STAGE4_STEM_SAMPLE_FORMAT = 'pcm24';
 export const STAGE4_STEM_BYTES_PER_SAMPLE = 3;
 
-/** OPFS directory the worker replaces on every song run. */
+/** OPFS directory holding the stems as `<stem>.wav`. The page frees it before checking quota for a new song and the
+ * worker recreates it; the page scans it on load and after every run, so stems left by a stopped run can be deleted. */
 export const STAGE4_STEM_DIRECTORY = 'stage4-stems';

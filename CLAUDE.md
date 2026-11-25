@@ -33,7 +33,9 @@
   deploy fails unless SHA-256 matches `MOBILE_STAGE4_CANDIDATE` in `packages/core/src/models/mobile-experimental.ts`). Device test:
   experimental card → "Stage IV: load + N windows" (`apps/web/src/inference/mobile-stage4.worker.ts`). The same card has
   "Separate a song on this device": core `separate()` + Stage IV session, stems streamed to OPFS as 24-bit WAV via `wavStemSink`
-  (`packages/core/src/codec/stem-wav-sink.ts`); main-app routing is unchanged (phones still go to the server).
+  (`packages/core/src/codec/stem-wav-sink.ts`); main-app routing is unchanged (phones still go to the server). The page scans
+  OPFS on load and after every run (`storedStem` = complete / partial / invalid from the header + size), so a stopped run's
+  files can be deleted. It frees old stems BEFORE the quota check: otherwise a phone near its quota fails every retry.
 
 ## Conventions / invariants
 - Node runs `.ts` directly (type stripping): **erasable syntax only** (no enums, namespaces, parameter properties); import with `.ts` extensions.

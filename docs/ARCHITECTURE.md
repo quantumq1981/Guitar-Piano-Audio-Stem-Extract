@@ -120,7 +120,7 @@ htdemucs_6s does not enforce Σ stems = mix. On raw single segments, Σ stems vs
 |---|---|---|---|---|---|---|---|---|---|
 | `htdemucs_6s-folded` | primary, 6 stems | `kramp/htdemucs-6s-webgpu-onnx` / `htdemucs_6s.onnx` | 284,797,240 | `a3f50506…ac86a` | ✅ [M] | ✅ [M] | ✅ [V] | server, browser, native | **canonical v1** |
 | `htdemucs_6s-upstream` | reference | `StemSplitio/htdemucs-6s-onnx` / `htdemucs_6s.onnx` | 258,159,781 | — | ✅ | ✅ | ❌ `ConstantOfShape` | none | not deployable |
-| `htdemucs_6s-folded-fp16w` | primary v2 candidate | built from `…/htdemucs_6s_fp16weights.onnx` by `scripts/fold_webgpu.py` | 143,359,115 | `1333aa4a…1946f` | ✅ [M] | ? | ? | none yet | ≥ 49 dB vs v1 [M]; needs real-GPU verification |
+| `htdemucs_6s-folded-fp16w` | primary v2 candidate | built from `…/htdemucs_6s_fp16weights.onnx` by `scripts/fold_webgpu.py` | 143,359,115 | `1333aa4a…1946f` | ✅ [M] | ? | ? | none yet | ≥ 49 dB vs v1 on the first clips [M]; **39.3 dB on a near-silent stem of another song** [M] (§ 8); needs real-GPU verification |
 | `guitar-lead-rhythm-ml` | lead/rhythm | — | — | — | — | — | — | server | **unavailable** (no open weights) |
 | `banquet-piano` | piano refinement | — (GitHub `kwatcharasupat/query-bandit`) | — | — | — | — | — | server | build-required, licence check |
 
@@ -202,13 +202,15 @@ See [`docs/API.md`](./API.md) for the HTTP and CLI contract shared by the PWA, t
 | Full guitar-scope job, 176.4 s track | 110.4 s wall, RTF 0.63, 7 stems × 2 formats, length-aligned |
 | Headless Chromium, WASM device path, 10 s clip | 6 stems; **64.3 dB** SNR vs server CPU (vocals L) |
 | Headless Chromium, forced-server guitar job via the PWA | 7 stems, heuristic warning surfaced |
-| fp16w-folded candidate vs fp32 canonical | ≥ 49.2 dB worst-segment SNR on every stem |
+| fp16w-folded candidate vs fp32 canonical | ≥ 49.2 dB worst-segment SNR on every stem (first clips) |
+| Same, 2026-11-25, three of the owner's songs × 3 windows | **min 39.3 dB** (piano, *Feel Like Makin' Love*, stem −63.5 dB re mix, error −103 dB re mix); every stem above −25 dB re mix ≥ 53.5 dB. The low figures are all on stems ≤ −50 dB re mix. See MOBILE-INFERENCE-DEVELOPMENT.md, Stage V progress. |
+| Stage IV mobile graph vs fp32 canonical, 8 songs × 3 windows | min 40.1 dB (same stem); tracks fp32→fp16w within 0.8 dB on every stem, so the fp16 weights, not the Stage IV rewrites, set it |
 
 ## 9. Next steps
 
 1. Profile WebGPU memory on real devices (an Apple Silicon Mac and a Pixel with 8 GiB RAM). This replaces the **[E]** WebGPU activation figure; until then iOS and Android stay server-only.
-2. Promote `htdemucs_6s-folded-fp16w` after WebGPU verification: half the download, same output to ≥ 49 dB.
+2. Promote `htdemucs_6s-folded-fp16w` (or the Stage IV graph built from it) after WebGPU verification: half the download. Not "same output to ≥ 49 dB": on near-silent stems it falls to 39.3 dB [M], so promotion needs the owner's decision on a level-aware parity rule (MOBILE-INFERENCE-DEVELOPMENT.md, Stage V progress).
 3. Add a Cloudflare adapter: a Worker front door and one Durable Object per job implementing the `JobStore` surface, with R2 for inputs and stems (lifecycle rule: 7 days) and the container running `stemsplit serve` as the worker.
-4. OPFS-backed `FrameSource` and `StemSink` for device clips longer than the in-memory budget.
+4. ~~OPFS-backed `FrameSource` and `StemSink`~~ built for the experimental card (`wavStemSink`, `interleavedFileSource`, resumable runs in `separation/resume.ts`); the main app still uses the in-memory path.
 5. Lead/rhythm ML: train or licence a model and swap it into the `guitar-lead-rhythm-ml` slot. The pipeline already selects it when `availability === 'published'`.
 6. Banquet: resolve the licence, export the PaSST and bandit models to ONNX, and add a parity test.

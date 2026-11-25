@@ -49,6 +49,21 @@ export interface ModelIO {
   readonly stems: readonly StemName[];
 }
 
+/** A file pinned by exact size and SHA-256. */
+export interface PinnedFile {
+  /** File name. For external data it is the name the graph records, so it must not be renamed on disk. */
+  readonly file: string;
+  readonly bytes: number;
+  readonly sha256: string;
+}
+
+export interface ExternalDataFile extends PinnedFile {
+  readonly url: string;
+}
+
+/** ORT graph optimisation an artifact was validated with, per tier. */
+export type GraphOptimization = 'all' | 'disabled';
+
 export interface ModelArtifact {
   readonly id: string;
   readonly version: string;
@@ -68,7 +83,27 @@ export interface ModelArtifact {
   readonly epSupport: Readonly<Record<ExecutionProvider, EpSupport>>;
   /** Tiers allowed to run this artifact by policy (not just by capability). */
   readonly allowedTiers: readonly ExecutionTier[];
+  /** Weights stored beside the graph (ONNX external data); `url`/`bytes`/`sha256` above then pin the graph file. */
+  readonly externalData?: ExternalDataFile;
+  /**
+   * Validated maximum sizes (WebAssembly pages, tried in order) for a shared WASM memory the browser runtime asks
+   * for. ORT's threaded build requests 4 GiB, which Safari may refuse to reserve. Only for an artifact whose browser
+   * heap is measured to fit; absent: no cap.
+   */
+  readonly browserWasmMemoryCapPages?: readonly number[];
+  /** Graph optimisation each tier must use (validated settings). Absent: 'all' everywhere. */
+  readonly graphOptimization?: Readonly<Record<ExecutionTier, GraphOptimization>>;
   readonly notes: readonly string[];
+}
+
+/** Graph optimisation `model` must run with on `tier`. */
+export function graphOptimizationFor(model: ModelArtifact, tier: ExecutionTier): GraphOptimization {
+  return model.graphOptimization?.[tier] ?? 'all';
+}
+
+/** Bytes to download for `model`: the graph plus any external data (null when unpinned). */
+export function downloadBytes(model: ModelArtifact): number | null {
+  return model.bytes === null ? null : model.bytes + (model.externalData?.bytes ?? 0);
 }
 
 const HTDEMUCS_6S_STEMS = ['drums', 'bass', 'other', 'vocals', 'guitar', 'piano'] as const satisfies readonly StemName[];
@@ -86,8 +121,8 @@ const htdemucsIO: ModelIO = {
 };
 
 /**
- * Canonical v1 artifact. Constant-folded export of htdemucs_6s that every EP
- * (CPU, WASM, WebGPU) can place, so server and browser run byte-identical weights.
+ * Previous canonical (v1, until 2026-11-25) and the parity reference for v2. Constant-folded export of htdemucs_6s
+ * that every EP (CPU, WASM, WebGPU) can place. Kept published so a rollback is a one-line switch.
  */
 export const HTDEMUCS_6S_FOLDED: ModelArtifact = {
   id: 'htdemucs_6s-folded',
@@ -158,6 +193,50 @@ export const HTDEMUCS_6S_FOLDED_FP16W: ModelArtifact = {
   ],
 };
 
+/** GitHub Pages copy of the Stage IV files. pages.yml rebuilds them deterministically from the fp16w source and
+ * fails the deploy unless both SHA-256s match the pins below, so this URL serves exactly these bytes. */
+const STAGE4_BASE_URL = 'https://quantumq1981.github.io/Guitar-Piano-Audio-Stem-Extract/models/';
+
+/**
+ * Canonical v2 artifact (owner decision 2026-11-25, Stage V option A): the Stage IV memory-optimised graph of the
+ * fp16-weight model, with weights as ONNX external data. One file pair on every tier; each tier opens it with its
+ * validated graph optimisation (browser 'disabled': folding re-enables ORT's buffer-reuse trap in WASM, +1.3 GiB).
+ * Built by scripts/mobile_graph.py then scripts/mobile_memory.py --external-data --accurate-reductions.
+ * Rollback: point PRIMARY_SEPARATION_MODEL back at HTDEMUCS_6S_FOLDED; every loader handles both.
+ */
+export const HTDEMUCS_6S_STAGE4: ModelArtifact = {
+  id: 'htdemucs_6s-stage4',
+  version: '2026.11-stage4-a343b853',
+  role: 'primary-separation',
+  displayName: 'HT-Demucs 6-stem (Stage IV memory-optimised, fp16-stored weights)',
+  availability: 'published',
+  hfRepo: null,
+  hfFile: null,
+  url: `${STAGE4_BASE_URL}candidate-memory.onnx`,
+  bytes: 1_201_735,
+  sha256: 'a343b853a28752f05e7188b42b4d1724d97de8ea3057d225bd8a4d76f7fc1110',
+  weightsDtype: 'fp16-stored',
+  license: 'MIT',
+  io: htdemucsIO,
+  epSupport: { cpu: 'supported', wasm: 'supported', webgpu: 'unsupported', coreml: 'untested', nnapi: 'untested', cuda: 'untested' },
+  allowedTiers: ['server', 'browser', 'native'],
+  externalData: {
+    file: 'candidate-memory.onnx.data',
+    url: `${STAGE4_BASE_URL}candidate-memory.onnx.data`,
+    bytes: 129_090_048,
+    sha256: '514978cfe52041f8272a52f91510b5f930cf9bc90504fccd5a51800f976069db',
+  },
+  graphOptimization: { server: 'all', native: 'all', browser: 'disabled' },
+  // 1 GiB, then 768 MiB: the heap peaks at 616 MiB reserved (iPhone and Chromium, byte-identical sequence) [M].
+  browserWasmMemoryCapPages: [16_384, 12_288],
+  notes: [
+    'vs. the fp32 v1 artifact, 8 songs × 3 windows: passes stemParity on every stem with graph optimisation disabled and all (min SNR 40.1 dB, on a piano at −63.5 dB re mix; error ≤ −90 dB re mix wherever SNR < 49 dB) [M].',
+    'Server, 4 vCPU, 31.2 s, two quiet runs each: RTF 0.44–0.46 and peak RSS 1.50–1.59 GiB with optimisation all (disabled: 0.48–0.49, 1.48–1.63 GiB), vs 0.58–0.62 and 2.76 GiB for v1 [M] (docs/ARCHITECTURE.md § 8).',
+    'Browser WASM heap 616 MiB reserved / 510 MiB touched on a physical iPhone, flat over a whole song [M].',
+    'WebGPU: session partitioning fails with dynamic shapes (/real_istft/Slice_2041) [M]; needs its own static-shape variant.',
+  ],
+};
+
 /**
  * Lead/rhythm guitar ML model. MVSep's lead/rhythm checkpoints are service-only;
  * no open ONNX artifact exists on the Hub as of 2026-11. The pipeline ships a
@@ -207,6 +286,7 @@ export const BANQUET_PIANO: ModelArtifact = {
 };
 
 export const MODEL_REGISTRY: readonly ModelArtifact[] = [
+  HTDEMUCS_6S_STAGE4,
   HTDEMUCS_6S_FOLDED,
   HTDEMUCS_6S_UPSTREAM,
   HTDEMUCS_6S_FOLDED_FP16W,
@@ -214,8 +294,8 @@ export const MODEL_REGISTRY: readonly ModelArtifact[] = [
   BANQUET_PIANO,
 ];
 
-/** The artifact every tier must use for primary separation in this release. */
-export const PRIMARY_SEPARATION_MODEL: ModelArtifact = HTDEMUCS_6S_FOLDED;
+/** The artifact every tier must use for primary separation in this release (rollback: HTDEMUCS_6S_FOLDED). */
+export const PRIMARY_SEPARATION_MODEL: ModelArtifact = HTDEMUCS_6S_STAGE4;
 
 export function findModel(id: string): ModelArtifact | undefined {
   return MODEL_REGISTRY.find((m) => m.id === id);

@@ -141,7 +141,8 @@ export type ResumeDecision =
  */
 export function decideResume(manifest: RunManifest, expected: ResumeExpectation, files: StoredRunFiles): ResumeDecision {
   const mismatch = (what: string) => ({ kind: 'unusable', reason: `the stored run used a different ${what}` }) as const;
-  if (manifest.modelId !== expected.modelId || manifest.graphSha256 !== expected.graphSha256) return mismatch('model');
+  // Identity is the graph's SHA-256 (it pins the external data's name too); modelId is a label and may be renamed.
+  if (manifest.graphSha256 !== expected.graphSha256) return mismatch('model');
   if (manifest.sampleRate !== expected.sampleRate || manifest.channels !== expected.channels) return mismatch('audio format');
   if (manifest.segmentFrames !== expected.segmentFrames || manifest.overlapRatio !== expected.overlapRatio) return mismatch('window geometry');
   if (manifest.stems.length !== expected.stems.length || manifest.stems.some((s, i) => s !== expected.stems[i])) return mismatch('stem order');

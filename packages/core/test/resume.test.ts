@@ -205,7 +205,8 @@ describe('resuming a stopped separation', () => {
       return d.kind === 'unusable' ? d.reason : d.kind;
     };
     expect(reason(manifestFor(frames, { graphSha256: 'b'.repeat(64) }))).toMatch(/model/);
-    expect(reason(manifestFor(frames, { modelId: 'other' }))).toMatch(/model/);
+    // A renamed model id with the same graph bytes is the same model (the artifact moved into the registry).
+    expect(reason(manifestFor(frames, { modelId: 'renamed' }))).toBe('resume');
     expect(reason(manifestFor(frames, { sampleRate: 48_000 }))).toMatch(/audio format/);
     expect(reason(manifestFor(frames, { overlapRatio: 0.2 }))).toMatch(/geometry/);
     expect(reason(manifestFor(frames, { stems: [...STEMS].reverse() }))).toMatch(/stem order/);

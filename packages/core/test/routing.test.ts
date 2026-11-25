@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CapabilitySnapshot, RouteRequest } from '../src/index.ts';
-import { HTDEMUCS_6S_UPSTREAM, REASON_COPY, classifyUserAgent, decideRoute, normaliseDeviceMemory } from '../src/index.ts';
+import { HTDEMUCS_6S_FOLDED, HTDEMUCS_6S_UPSTREAM, PRIMARY_SEPARATION_MODEL, REASON_COPY, classifyUserAgent, decideRoute, downloadBytes, normaliseDeviceMemory } from '../src/index.ts';
 
 const desktop: CapabilitySnapshot = {
   formFactor: 'desktop',
@@ -36,14 +36,32 @@ const base = (over: Partial<RouteRequest> = {}): RouteRequest => ({
 });
 
 describe('decideRoute', () => {
-  it('runs capable desktop WebGPU jobs on device', () => {
-    const d = decideRoute(base());
+  it('runs capable desktop WebGPU jobs on device (WebGPU-placeable artifact)', () => {
+    const d = decideRoute(base({ model: HTDEMUCS_6S_FOLDED }));
     expect(d.target).toBe('device');
     if (d.target !== 'device') return;
     expect(d.ep).toBe('webgpu');
     expect(d.reasons).toEqual(['eligible_webgpu']);
     expect(d.warnings).toContain('lower_fidelity_than_server');
     expect(d.warnings).toContain('memory_numbers_are_estimates');
+  });
+
+  it('runs the primary (Stage IV) on WASM even where WebGPU is available, since it cannot be placed there', () => {
+    expect(PRIMARY_SEPARATION_MODEL.epSupport.webgpu).toBe('unsupported');
+    const d = decideRoute(base());
+    expect(d.target).toBe('device');
+    if (d.target !== 'device') return;
+    expect(d.ep).toBe('wasm');
+    expect(d.reasons).toEqual(['eligible_wasm']);
+  });
+
+  it('budgets storage and memory on the graph plus its external data', () => {
+    const total = downloadBytes(PRIMARY_SEPARATION_MODEL)!;
+    expect(total).toBe(PRIMARY_SEPARATION_MODEL.bytes! + PRIMARY_SEPARATION_MODEL.externalData!.bytes);
+    const tight = decideRoute(base({ caps: { ...desktop, modelCached: false, storageAvailableBytes: total * 1.4 } }));
+    expect(tight.reasons).toContain('insufficient_storage_for_model');
+    const roomy = decideRoute(base({ caps: { ...desktop, modelCached: false, storageAvailableBytes: total * 1.6 } }));
+    expect(roomy.target).toBe('device');
   });
 
   it('always offloads phones, even when the user prefers the device', () => {
@@ -83,16 +101,16 @@ describe('decideRoute', () => {
     expect(decideRoute(base({ scope: 'quick' })).target).toBe('device');
   });
 
-  it('applies the 90 s WebGPU cap and 30 s WASM cap', () => {
-    expect(decideRoute(base({ input: { durationSec: 91, bytes: 1e6 } })).reasons).toContain('duration_over_local_cap');
+  it('applies the 90 s local cap on WebGPU and on threaded WASM', () => {
+    expect(decideRoute(base({ model: HTDEMUCS_6S_FOLDED, input: { durationSec: 91, bytes: 1e6 } })).reasons).toContain('duration_over_local_cap');
     const noGpu = { ...desktop, webgpu: { ...desktop.webgpu, available: false } };
-    const wasmOk = decideRoute(base({ caps: noGpu, input: { durationSec: 30, bytes: 1e6 } }));
+    const wasmOk = decideRoute(base({ caps: noGpu, input: { durationSec: 90, bytes: 1e6 } }));
     expect(wasmOk.target).toBe('device');
     if (wasmOk.target === 'device') {
       expect(wasmOk.ep).toBe('wasm');
       expect(wasmOk.warnings).toContain('wasm_slow_path');
     }
-    expect(decideRoute(base({ caps: noGpu, input: { durationSec: 31, bytes: 1e6 } })).reasons).toContain('duration_over_local_cap');
+    expect(decideRoute(base({ caps: noGpu, input: { durationSec: 91, bytes: 1e6 } })).reasons).toContain('duration_over_local_cap');
   });
 
   it('treats a software fallback adapter as no WebGPU, and refuses unthreaded WASM', () => {

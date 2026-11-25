@@ -9,7 +9,7 @@
 import type { SeparationOptions, SeparationScope } from '../api/contract.ts';
 import { LOCAL_LIMITS, SERVER_LIMITS, scopeRequiresServer } from '../api/contract.ts';
 import type { ModelArtifact } from '../models/registry.ts';
-import { PRIMARY_SEPARATION_MODEL } from '../models/registry.ts';
+import { PRIMARY_SEPARATION_MODEL, downloadBytes } from '../models/registry.ts';
 import type { MemoryProjection } from '../memory/budget.ts';
 import { PLATFORM_CEILINGS, platformClass, projectPeakMemory } from '../memory/budget.ts';
 import type { CapabilitySnapshot } from './probe.ts';
@@ -88,7 +88,8 @@ export function decideRoute(req: RouteRequest): RouteDecision {
     blockers.push('battery_low');
   }
 
-  const webgpu = caps.webgpu.available && !caps.webgpu.isFallbackAdapter;
+  // The model must be placeable on WebGPU too: the Stage IV artifact is not (partitioning fails, measured).
+  const webgpu = caps.webgpu.available && !caps.webgpu.isFallbackAdapter && model.epSupport.webgpu !== 'unsupported';
   const ep: 'webgpu' | 'wasm' = webgpu ? 'webgpu' : 'wasm';
   const localCap = webgpu ? LOCAL_LIMITS.maxDurationSecWebGpu : LOCAL_LIMITS.maxDurationSecWasm;
   if (input.durationSec > localCap) blockers.push('duration_over_local_cap');
@@ -109,7 +110,8 @@ export function decideRoute(req: RouteRequest): RouteDecision {
     if (memory.projectedPeakBytes > ceiling.abortAboveBytes.value) blockers.push('memory_projection_exceeds_ceiling');
     if (memory.hasEstimates) warnings.push('memory_numbers_are_estimates');
   }
-  if (!caps.modelCached && caps.storageAvailableBytes !== null && model.bytes !== null && caps.storageAvailableBytes < model.bytes * 1.5) {
+  const modelBytes = downloadBytes(model); // graph + external data
+  if (!caps.modelCached && caps.storageAvailableBytes !== null && modelBytes !== null && caps.storageAvailableBytes < modelBytes * 1.5) {
     blockers.push('insufficient_storage_for_model');
   }
 

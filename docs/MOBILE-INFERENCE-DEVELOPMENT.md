@@ -1,6 +1,6 @@
 # Mobile inference development — Engineering handoff
 
-Checkpoint: 2026-11-25 UTC (Stage V started: direct Stage IV vs fp32 parity measured, resume built; see "Stage V progress"). Earlier: 2026-11-24 (Stage IV; first physical iPhone pass recorded). PR #12 and the Stage IV PR stacked on it remain open; experimental work is not production-approved. Stage IV below supersedes the Stage III remaining-work list.
+Checkpoint: 2026-11-25 UTC (Stage V: resume built; step 1 done, Stage IV is the primary on every tier; see "Stage V step 1 — done"). Earlier: 2026-11-24 (Stage IV; first physical iPhone pass recorded). PR #12 and the Stage IV PR stacked on it remain open; experimental work is not production-approved. Stage IV below supersedes the Stage III remaining-work list.
 
 ## Stage I — Original Claude development
 Read [CLAUDE.md](../CLAUDE.md), [original engineering specification](../Guitar%20-Piano-ASE-Separation%20App.md), [ARCHITECTURE.md](ARCHITECTURE.md), and [API.md](API.md). Preserve these historical documents. Stage I deliberately routes phones to server because native CPU peak RSS was 2.40 GiB with arena/pattern disabled, 4.7 GiB with defaults. Original browser/server parity was 64.3 dB; original server RTF 0.45–0.68 on four vCPU. Stage II investigates whether local six-stem inference can become practical without paid hosting; it does not invalidate the original safeguards.
@@ -338,7 +338,43 @@ Done in this session: the measurement that the step 1 decision needs, and step 2
 - **Not done:** whether iOS freezes or kills a hidden tab's worker (the card still stops on hide; resume makes that cheap); the physical-iPhone test.
 - **Not run here:** `python -m unittest scripts/test_mobile_memory.py` (the sandbox has no `onnx` package; no Python changed; CI runs it).
 
-**Next session:** ask the owner for step 0 numbers and the step 1 decision (A or B, and the parity amendment above), then steps 2 (routing, limits, memory projection), 3 and 4.
+**Next session:** step 1 is done (below). Build step 2 (phone routing, limits, memory projection with the measured v2 heap), then 3 and 4. Step 0 iPhone thread numbers are still welcome but no longer block.
+
+### Stage V step 1 — done: option A, Stage IV is the primary on every tier (2026-11-25) [M]
+**Owner decisions (2026-11-25):** option A; the level-aware parity rule; and a standing rule to make improvements by judgment, documented and easy to retrace.
+
+**What changed (rollback = one line: `PRIMARY_SEPARATION_MODEL = HTDEMUCS_6S_FOLDED` in `registry.ts`):**
+- **Core**
+  - The parity contract is now `stemParity()` in `dsp/metrics.ts`: per stem, SNR ≥ 40 dB, **or** error ≤ −90 dB re mix. It works from energies, so a silent reference stem is judged by its error, and NaN output always fails. Tests in `test/parity.test.ts`. `compare-models.ts` uses it and exits non-zero on any failing window.
+  - Registry: `HTDEMUCS_6S_STAGE4`, with an `externalData` pinned file, per-tier `graphOptimization` (server/native `all`, browser `disabled`), `browserWasmMemoryCapPages` and `epSupport.webgpu: 'unsupported'`. `downloadBytes()` counts graph + data.
+  - Bug fixed: routing's storage check and `projectPeakMemory` used `model.bytes`, the 1.2 MB graph only. A routing test caught it.
+  - `MOBILE_STAGE4_CANDIDATE` now derives from the registry entry. `decideResume` identifies a model by graph SHA-256, not by its id label, so stored runs on a phone stay resumable across the rename.
+  - Routing skips WebGPU for a model that cannot be placed there.
+  - `LOCAL_LIMITS.maxDurationSecWasm` is raised from 30 s to 90 s. The 30 s came from a "5–10× slower" estimate; measured v2 WASM at 4 threads runs about real time.
+- **Server:** `ensureModel` fetches and verifies both files and stores the data under the name the graph records (data first, so a graph without data is never "ready"). `createOrtRunner` verifies both and takes graph optimisation from the registry. New `scripts/bench-artifact.ts` benches any ONNX file outside the registry.
+- **Web**
+  - `platform/model-cache.ts` caches every file of an artifact under its SHA-256. A cached entry with the wrong size is evicted and downloaded again, and other versions are dropped. Headless tests are in `apps/web/test/model-cache.test.ts`.
+  - The main `worker.ts` is registry-driven:
+    - plain WASM build (JSEP only for `webgpu`);
+    - graph optimisation `disabled` for the browser;
+    - `externalData`, with the download buffers dropped after `create()`;
+    - the capped `WebAssembly.Memory` from the shared `inference/wasm-memory.ts`, also used by the card.
+- **CI:** the `separate.yml` model-cache key follows the primary.
+
+**Measured**
+- **Promotion gate:** 16 / 16 PASS (8 songs × 3 windows × both session settings). Every stem passes on SNR alone, min 40.1 dB; the amendment is headroom for new material.
+- **Server bench:** RTF 0.44–0.46 vs 0.58–0.62 for v1, peak RSS 1.50–1.59 vs 2.76 GiB. Optimisation `all` is about 7 % faster than `disabled` on the server, with the same memory and parity.
+- **CLI:** `models fetch` from the registry URLs into an empty directory, then a full 267 s song, works end to end.
+- **Headless Chromium, main app** (`browser-smoke.mjs --server`): device path, 6 stems in 27.6 s for a 10 s clip. **Browser WASM vs server CPU: 91.8 dB**, up from 64.3 dB with v1, because the tiers now run one graph. The server path gives 7 stems.
+
+**Production bug found and fixed on the way:** `local-client.ts` aborted local runs on Compute Pressure `critical`. Chromium derives that state from CPU utilisation, so the run's own 4-thread load reached `critical` 15 s in, and the client terminated the worker 5 s later, mid-window. It looked like a hang (1 thread passed). This was latent for every Chromium desktop run at full threads, and the v1 E2E passed only because older headless Chromium lacked `PressureObserver`. The guard is removed, with the reasoning in the file header. Bisection, in order: 1 thread passes; `proxy`/`logLevel` are not it; block transfer is not it; the card at 4 threads passes; the observer was logged going fair → serious → critical.
+
+**Hosting note:** the registry URLs point at the GitHub Pages copy. `pages.yml` rebuilds it deterministically and refuses to deploy unless the SHA-256 pins match, and every loader verifies the pins, so drift fails loudly. An immutable GitHub Release asset would be sturdier long term.
+
+**Not changed (next PR: Stage V step 2):**
+- Phones still route to the server (`phone_form_factor`).
+- `budget.ts` still uses the v1 activation estimates (2000 MiB). That over-estimates v2, so routing errs towards the server, never towards unsafe.
+- Main-app playback still decodes stems into memory.
 
 **Later (unchanged):** further exact memory cuts (chunk the frequency-branch DConv along its 512-row batch; run the ISTFT tail per source; both remove 63 MiB tensors); other devices (iPads, older iOS → ORT 1.23.2, Android Chrome); WebGPU (static shapes, shader-f16, GPU-process memory on iOS).
 
@@ -361,8 +397,8 @@ Potential Bandleader HQ integration with Tab Translator Pro, Chord Sheet Maker P
 
 ## Fresh-session prompt
 Read CLAUDE.md, docs/ARCHITECTURE.md and this file (main branch; all Stage IV work through PR #19 is merged). Check the latest PRs and Actions runs before changing anything. Start Stage V:
-1. Ask the owner for the step 0 iPhone thread results if they are not recorded here.
-2. Ask for the step 1 model-policy decision (A or B) before writing code, together with the parity-rule amendment in "Stage V progress" (the direct measurement is done: min 40.1 dB, set by the fp16 weights on a near-silent stem).
-3. Step 2b (resume) is built; build steps 2–4 as one reviewed PR, or a few small ones.
+1. Step 1 is decided and built: option A (Stage IV is the primary on every tier) and the level-aware parity rule, see "Stage V step 1 — done". Step 2b (resume) is built.
+2. Next: step 2 (phones on device: routing, limits, memory projection from the measured v2 heap, stem choice), then step 3 (main-app playback and export from OPFS, wake lock, resume in the main UI) and step 4. Ask the owner for step 0 iPhone thread numbers if they are not recorded here; they set the default thread count but do not block the work.
+3. The owner's standing rule (2026-11-25): make improvements by judgment, document them, keep every change easy to retrace.
 
 Keep main-app routing for non-phone devices and the server path working. Do not repeat completed experiments. Tag numbers [M]/[V]/[E], and do not claim device results from Chromium or WebKit runs. Record measured results here as work progresses. Tab Translator Pro is not attached; its lessons are in the section above.

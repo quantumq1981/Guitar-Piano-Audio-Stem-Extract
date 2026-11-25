@@ -16,11 +16,13 @@
 
 ## Commands
 - `npm test` (vitest, all workspaces) · `npm run typecheck` (tsc 7 strict, per package) · `npm run build:web`
-- `npm run models:fetch` → `models/htdemucs_6s-folded.onnx` (gitignored, sha256-pinned in the registry)
+- `npm run models:fetch` → `models/htdemucs_6s-stage4.onnx` + `models/candidate-memory.onnx.data` (gitignored, both sha256-pinned)
 - Real separation: `node packages/server/src/cli.ts separate <file> --scope guitar --format wav24`
 - Resume E2E: copy the Stage IV pair into `apps/web/dist/models/`, `vite preview --port 4173`, then
   `NODE_PATH=/opt/node-tools/node_modules node scripts/e2e/stage4-resume.mjs http://localhost:4173 <clip.wav> --threads 4`
-- Browser E2E: build web with `VITE_MODEL_MIRROR=/__models`, hard-link the model to `apps/web/dist/__models/<sha256>.onnx`,
+- Server-side bench of any ONNX file: `node packages/server/scripts/bench-artifact.ts <model.onnx> <audio> [secs] [threads] [all|disabled]`
+- Browser E2E: build web with `VITE_MODEL_MIRROR=/__models VITE_API_BASE=http://localhost:8787`, hard-link the graph to
+  `apps/web/dist/__models/<graph sha256>.onnx` and the data to `apps/web/dist/__models/<data sha256>.onnx.data`,
   `vite preview --port 4173`, `stemsplit serve`, then `node scripts/e2e/browser-smoke.mjs http://localhost:4173 <clip.wav> <server-vocals.wav> --server`
 
 ## Deploy
@@ -51,7 +53,10 @@
 ## Conventions / invariants
 - Node runs `.ts` directly (type stripping): **erasable syntax only** (no enums, namespaces, parameter properties); import with `.ts` extensions.
 - Business logic goes in `packages/core` and must stay headless-testable. UI/browser APIs only in `apps/web/src/platform|audio|inference`.
-- One model artifact everywhere. Changing it = new registry entry with sha256 + parity (≥ 40 dB SNR, `compare-models.ts`) and switching all tiers at once.
+- One model artifact everywhere (since 2026-11-25: `htdemucs_6s-stage4`, graph + external data). Changing it = new registry entry
+  with sha256 (both files) + parity (`stemParity`: ≥ 40 dB SNR or error ≤ −90 dB re mix; `compare-models.ts` exits non-zero) and
+  switching all tiers at once. Session settings per tier come from the registry (`graphOptimizationFor`), never hard-coded.
+- Do not abort local runs on Compute Pressure: Chromium's `critical` is CPU utilisation, i.e. our own threads (measured).
 - Every job status change goes through `transition()`; never assign `status` directly.
 - Tag numbers in docs as [M]easured / [V]endor / [E]stimate. Do not present estimates as facts.
 - Per-stem SNR on a stem ≤ −50 dB re mix measures how quiet the stem is, not model error: read `compare-models.ts`'s
@@ -68,6 +73,15 @@
   `NoModificationAllowedError` when reopening a stopped run's files. In Chromium a reload is not a kill (visibilitychange
   fires first); E2E kills use CDP `Page.crash`.
 - The MP3s in the repo root are the owner's test material; never commit derived stems (`out/` is gitignored).
+
+## Status (2026-11-25, latest) — Stage V step 1 done: Stage IV is the primary on every tier
+- Owner chose option A and the level-aware parity rule, plus a standing rule: improve by judgment, document, keep it retraceable.
+- `PRIMARY_SEPARATION_MODEL = HTDEMUCS_6S_STAGE4` (graph + external data from Pages, both SHA-pinned; server opt `all`,
+  browser `disabled`). Rollback: point it back at `HTDEMUCS_6S_FOLDED`; every loader handles both.
+- Gate 16/16 PASS (min 40.1 dB). Server RTF 0.44–0.46 vs 0.58–0.62, peak 1.5–1.6 vs 2.8 GiB. Browser↔server 91.8 dB (v1 64.3).
+- Fixed: the Compute Pressure abort killed every 4-thread desktop run (our own load reads as `critical`); storage/memory
+  budgets counted only the 1.2 MB graph. WASM device cap 30 → 90 s (measured basis).
+- Next: Stage V step 2 (phones on device in the main app), then 3–4. Handoff: "Stage V step 1 — done".
 
 ## Status (2026-11-25, later) — Stage V started; waiting on the owner
 - Measured Stage IV vs production fp32 directly (8 songs × 3 windows, `compare-models.ts --candidate-graph-opt disabled`):

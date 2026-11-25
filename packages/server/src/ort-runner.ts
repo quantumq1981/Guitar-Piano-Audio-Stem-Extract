@@ -5,9 +5,10 @@
  */
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
+import { dirname, join } from 'node:path';
 import * as ort from 'onnxruntime-node';
 import type { ModelArtifact, ModelIO, SegmentRunner } from '@stemsplit/core';
-import { requireIO } from '@stemsplit/core';
+import { graphOptimizationFor, requireIO } from '@stemsplit/core';
 
 export interface OrtRunnerOptions {
   readonly intraOpThreads?: number;
@@ -38,9 +39,16 @@ export async function createOrtRunner(model: ModelArtifact, path: string, opts: 
     const actual = await sha256File(path);
     if (actual !== model.sha256) throw new ModelHashMismatchError(path, model.sha256, actual);
   }
+  if (!opts.skipHashCheck && model.externalData) {
+    // ORT reads the data file by the name the graph records, from the graph's directory.
+    const dataPath = join(dirname(path), model.externalData.file);
+    const actual = await sha256File(dataPath).catch(() => 'missing');
+    if (actual !== model.externalData.sha256) throw new ModelHashMismatchError(dataPath, model.externalData.sha256, actual);
+  }
   const session = await ort.InferenceSession.create(path, {
     executionProviders: ['cpu'],
-    graphOptimizationLevel: 'all',
+    // Validated per tier (registry). Stage IV on the server: 'all' is ~7 % faster than 'disabled', same memory and parity [M].
+    graphOptimizationLevel: graphOptimizationFor(model, 'server'),
     intraOpNumThreads: opts.intraOpThreads ?? 0,
     // Measured: arena + memory-pattern planning push peak RSS from 2.4 GiB to 4.7 GiB
     // by the second segment for a <20% speed gain. Bounded memory wins on shared containers.

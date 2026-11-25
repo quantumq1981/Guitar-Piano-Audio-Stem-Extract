@@ -1,7 +1,12 @@
 /**
- * UI-thread controller for on-device separation. Owns the lifecycle guards the
- * spec requires: crash marker, abort on page hidden, abort on low battery, and
- * abort on critical CPU pressure (Compute Pressure API, where available).
+ * UI-thread controller for on-device separation. Owns the lifecycle guards: crash marker, abort on page hidden,
+ * abort on low battery.
+ *
+ * Removed 2026-11-25: abort on "critical" Compute Pressure. Chromium derives that state from CPU utilisation, so a
+ * multi-threaded WASM run that uses every core (as intended) drives it to critical by itself and was terminated
+ * mid-window: measured in headless Chromium 158, 4 vCPU, 4 threads: fair → serious → critical at 15 s, the run
+ * stopped with "the device is thermally throttling"; without the observer the same build finished in 30 s. A hot
+ * device downclocks itself (slower, nothing lost), so the guard cost every desktop run and protected nothing.
  */
 import type { SeparationProgress, StemName } from '@stemsplit/core';
 import { LOCAL_LIMITS, MODEL_SAMPLE_RATE } from '@stemsplit/core';
@@ -22,12 +27,6 @@ export class LocalAbortError extends Error {
     this.reason = reason;
   }
 }
-
-interface PressureObserverLike {
-  observe(source: 'cpu'): Promise<void>;
-  disconnect(): void;
-}
-type PressureCtor = new (cb: (records: Array<{ state: string }>) => void) => PressureObserverLike;
 
 export async function runLocal(
   ep: 'webgpu' | 'wasm',
@@ -70,19 +69,6 @@ export async function runLocal(
     battery = null;
   }
 
-  let pressure: PressureObserverLike | null = null;
-  const Pressure = (globalThis as { PressureObserver?: PressureCtor }).PressureObserver;
-  if (Pressure) {
-    try {
-      pressure = new Pressure((records) => {
-        if (records.some((r) => r.state === 'critical')) abort('the device is thermally throttling');
-      });
-      await pressure.observe('cpu');
-    } catch {
-      pressure = null;
-    }
-  }
-
   setCrashFlag({ startedAt: Date.now(), durationSec: frames / MODEL_SAMPLE_RATE, ep });
   const cleanup = () => {
     clearTimeout(abortTimer);
@@ -90,7 +76,6 @@ export async function runLocal(
     document.removeEventListener('visibilitychange', onVisibility);
     battery?.removeEventListener('levelchange', onBattery);
     battery?.removeEventListener('chargingchange', onBattery);
-    pressure?.disconnect();
     worker.terminate();
   };
 

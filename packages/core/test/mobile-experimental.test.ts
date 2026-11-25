@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   capWasmMemoryDescriptor,
+  graphOptimizationFor,
+  PRIMARY_SEPARATION_MODEL,
   HTDEMUCS_6S_FOLDED_FP16W,
   maxAbsDifference,
   MOBILE_STAGE4_CANDIDATE,
@@ -26,8 +28,13 @@ describe('MOBILE_STAGE4_CANDIDATE', () => {
     expect(c.session.graphOptimizationLevel).toBe('disabled');
   });
 
-  it('is never part of the routed registry', () => {
-    expect(MODEL_REGISTRY.map((m) => m.id)).not.toContain(MOBILE_STAGE4_CANDIDATE.id);
+  // Owner decision 2026-11-25 (option A): the card now loads exactly the primary artifact's pinned bytes.
+  it('pins the same bytes as the primary artifact', () => {
+    const primary = MODEL_REGISTRY.find((m) => m.id === MOBILE_STAGE4_CANDIDATE.id)!;
+    expect(primary).toBe(PRIMARY_SEPARATION_MODEL);
+    expect(MOBILE_STAGE4_CANDIDATE.graph).toMatchObject({ bytes: primary.bytes, sha256: primary.sha256 });
+    expect(MOBILE_STAGE4_CANDIDATE.data).toEqual({ file: primary.externalData!.file, bytes: primary.externalData!.bytes, sha256: primary.externalData!.sha256 });
+    expect(MOBILE_STAGE4_CANDIDATE.session.graphOptimizationLevel).toBe(graphOptimizationFor(primary, 'browser'));
   });
 });
 

@@ -42,8 +42,12 @@ export const SERVER_LIMITS = {
 export const LOCAL_LIMITS = {
   /** Browser inference cap with WebGPU; longer inputs auto-route to the server. */
   maxDurationSecWebGpu: 90,
-  /** Without WebGPU, WASM is ~5–10× slower; keep jobs short enough to survive tab throttling. */
-  maxDurationSecWasm: 30,
+  /**
+   * Threaded WASM (unthreaded WASM is refused separately). Was 30 s on an estimate ("5–10× slower than WebGPU").
+   * Raised 2026-11-25 with the Stage IV primary: 5.7 s per 7.8 s window at 4 threads in Chromium and WebKit
+   * (4 vCPU) [M], i.e. about real time per song with the 25 % overlap. The memory projection still guards each device.
+   */
+  maxDurationSecWasm: 90,
   /** Disable local inference below this battery level when not charging. */
   minBatteryLevel: 0.2,
 } as const;

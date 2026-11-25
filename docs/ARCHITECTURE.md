@@ -17,7 +17,7 @@ The source spec (`Guitar -Piano-ASE-Separation App.md`) is directionally right: 
 | 2 | A 4-stem browser default for a *guitar and piano* app | Product contradiction | 4-stem output has no guitar or piano stem | The device tier runs the 6-stem model or nothing |
 | 3 | "WebGPU models ~80 MB" | False | The WebGPU-compatible `kramp/htdemucs-6s-webgpu-onnx` is 285 MB **[M]**. An fp16-weights fold we built is 143 MB **[M]** | Registry pins exact bytes and sha256 |
 | 4 | ~1.1 GB RAM per segment **[V: StemSplit, M4 Pro]**; iOS abort at 1 GB | Vendor figure is about half of reality on x64 | ORT 1.31 CPU EP peaks at **2.40 GiB** steady state with arena and mem-pattern off, and **4.7 GiB** with ORT defaults by the 2nd run **[M]** | The 6-stem model is **not viable in any mobile browser**. Phones and tablets always route to the server, which the measured budget now proves |
-| 5 | Same ONNX files ⇒ "byte-comparable" outputs | False | Kernels, FMA and reduction order differ per EP. Browser WASM vs server CPU = **64.3 dB SNR**, not identical **[M]** | Parity contract is numeric: per-stem SNR ≥ 40 dB (`PARITY_MIN_SNR_DB`) |
+| 5 | Same ONNX files ⇒ "byte-comparable" outputs | False | Kernels, FMA and reduction order differ per EP. Browser WASM vs server CPU = **64.3 dB SNR** with v1, **91.8 dB** with v2, not identical **[M]** | Parity contract is numeric (`stemParity` in core): per stem, SNR ≥ 40 dB (`PARITY_MIN_SNR_DB`) **or** error ≤ −90 dB re mix (`PARITY_MAX_ERROR_DB_RE_MIX`, owner-approved 2026-11-25 for near-silent stems) |
 | 6 | Same files ⇒ no drift | Incomplete | Decoders drift too: browser `decodeAudioData` trims MP3/AAC priming differently from FFmpeg | Server jobs always upload the *original file*; the server decodes with FFmpeg |
 | 7 | 40 MB upload cap with a 6-minute limit | Inconsistent | A 6-minute 16-bit 44.1 kHz stereo WAV is 63.5 MB | Cap raised to **64 MiB** |
 | 8 | MVSep lead/rhythm model (lead SI-SDR ≈ 6.43 dB) | Not obtainable | No open weights or ONNX on the Hub; MVSep is a hosted service **[V]** | Slot filled by a labelled DSP heuristic (`spatial-similarity-v0`, §2.4). The ML slot stays in the registry as `unavailable` |
@@ -40,14 +40,15 @@ Bugs found while building, each now handled in code:
 | Constraint | Value | Source |
 |---|---|---|
 | Model input window | 343,980 frames = 7.8 s @ 44.1 kHz stereo, fixed shape | ONNX graph **[M]** |
-| Primary model RSS per session (CPU EP) | 2.40 GiB peak, 435 MiB after load | **[M]** `packages/server/scripts/mem-probe.mjs` |
-| Server throughput | RTF 0.45–0.68 on 4 vCPU x64 | **[M]** `stemsplit bench` and full runs |
-| Browser WASM throughput | 10 s clip in 31.6 s including about 20 s model load and session create (headless Chromium, 4 threads) | **[M]** `scripts/e2e/browser-smoke.mjs` |
+| Primary model RSS per session (CPU EP) | v2 (Stage IV, since 2026-11-25): 1.50–1.59 GiB peak over 31.2 s, 0.98 GiB after load. v1: 2.40–2.76 GiB peak, 435–880 MiB after load | **[M]** `packages/server/scripts/bench-artifact.ts` (VmHWM), `mem-probe.mjs` |
+| Server throughput | v2: RTF 0.44–0.46 on 4 vCPU x64 (v1 in the same runs: 0.58–0.62; earlier v1 runs 0.45–0.68) | **[M]** `bench-artifact.ts`, `stemsplit bench`, full runs |
+| Browser WASM throughput | v2: 10 s clip in 27.6 s including model download and session create (headless Chromium, 4 threads); v1: 31.6 s | **[M]** `scripts/e2e/browser-smoke.mjs` |
+| Browser WASM heap (v2) | 616 MiB reserved / 510 MiB touched, flat over a whole song, physical iPhone and Chromium alike | **[M]** experimental card |
 | iOS Safari tab kill | ~1.5 GiB | **[E]** |
 | wasm32 address space | 4 GiB hard limit | spec |
 | Server job duration cap | 360 s | policy |
 | Upload cap | 64 MiB | policy (see §0 #7) |
-| Device duration cap | 90 s with WebGPU, 30 s with WASM | policy |
+| Device duration cap | 90 s with WebGPU or threaded WASM (WASM was 30 s on an estimate until 2026-11-25; v2 WASM at 4 threads is about real time per song [M]) | policy |
 | Result retention | 7 days, HMAC-signed URLs | policy |
 
 Design rule: **no client architecture may assume more than ~1 GiB of headroom on mobile.** The measured 2.4 GiB session therefore makes the server path mandatory for phones *and* tablets, not merely the default.
@@ -118,7 +119,8 @@ htdemucs_6s does not enforce Σ stems = mix. On raw single segments, Σ stems vs
 
 | Registry id | Role | Hub repo / file | Bytes | sha256 | CPU | WASM | WebGPU | Tiers | Status |
 |---|---|---|---|---|---|---|---|---|---|
-| `htdemucs_6s-folded` | primary, 6 stems | `kramp/htdemucs-6s-webgpu-onnx` / `htdemucs_6s.onnx` | 284,797,240 | `a3f50506…ac86a` | ✅ [M] | ✅ [M] | ✅ [V] | server, browser, native | **canonical v1** |
+| `htdemucs_6s-stage4` | primary, 6 stems | graph `candidate-memory.onnx` + external data `.onnx.data` (GitHub Pages, rebuilt and SHA-checked by `pages.yml`) | 1,201,735 + 129,090,048 | `a343b853…f7fc1110` + `514978cf…9db` | ✅ [M] | ✅ [M] | ❌ [M] (dynamic-shape partitioning) | server, browser, native | **canonical v2** since 2026-11-25 (owner decision, option A) |
+| `htdemucs_6s-folded` | previous primary; parity reference | `kramp/htdemucs-6s-webgpu-onnx` / `htdemucs_6s.onnx` | 284,797,240 | `a3f50506…ac86a` | ✅ [M] | ✅ [M] | ✅ [V] | server, browser, native (rollback) | **v1**; rollback = point `PRIMARY_SEPARATION_MODEL` back at it |
 | `htdemucs_6s-upstream` | reference | `StemSplitio/htdemucs-6s-onnx` / `htdemucs_6s.onnx` | 258,159,781 | — | ✅ | ✅ | ❌ `ConstantOfShape` | none | not deployable |
 | `htdemucs_6s-folded-fp16w` | primary v2 candidate | built from `…/htdemucs_6s_fp16weights.onnx` by `scripts/fold_webgpu.py` | 143,359,115 | `1333aa4a…1946f` | ✅ [M] | ? | ? | none yet | ≥ 49 dB vs v1 on the first clips [M]; **39.3 dB on a near-silent stem of another song** [M] (§ 8); needs real-GPU verification |
 | `guitar-lead-rhythm-ml` | lead/rhythm | — | — | — | — | — | — | server | **unavailable** (no open weights) |
@@ -174,9 +176,9 @@ Cross-origin isolation uses `COOP: same-origin` and `COEP: require-corp`. Safari
 | Risk | Likelihood / impact | Detection | Mitigation in code |
 |---|---|---|---|
 | Silent tab kill (OOM) | High on mobile / lost work | no event fires; `localStorage` crash marker found at next start | phones and tablets never run locally (measured budget); marker forces server next time; marker kept when ORT throws non-abort errors |
-| WASM heap exhaustion | High below 4 GiB address space | ORT `create()` / `run()` throws | WASM only on cross-origin-isolated desktop, clips ≤ 30 s; arena off; error UI offers server |
+| WASM heap exhaustion | High below 4 GiB address space | ORT `create()` / `run()` throws | v2 heap is 616 MiB (measured), capped `WebAssembly.Memory` (1 GiB, then 768 MiB); WASM only on cross-origin-isolated pages, clips ≤ 90 s; arena off; error UI offers server |
 | WebGPU session-creation failure (`ConstantOfShape`, `transformer_memcpy`-class placement errors) | Medium / no local path | `InferenceSession.create` rejects | canonical artifact is the constant-folded export; registry refuses unfolded models in the browser (`model_not_browser_eligible`); fallback to server |
-| Thermal throttling | Medium on laptops | Compute Pressure API `critical` (Chromium) | abort at chunk boundary, offer server |
+| Thermal throttling | Medium on laptops | none since 2026-11-25 | **Guard removed.** Chromium's Compute Pressure `critical` follows CPU utilisation, so a 4-thread run reached it from its own load (fair → serious → critical at 15 s) and was terminated mid-window; without it the same run finished [M]. A hot device downclocks: slower, nothing lost. |
 | Background tab freeze | High on mobile | `visibilitychange` → hidden | abort at chunk boundary, offer server |
 | Battery drain | Medium | `getBattery()` where available | gate < 20 % when not charging, and mid-run abort |
 | ORT pthread deadlock under bundlers | Hit during build | session never resolves | `em-pthread` guard in the worker (§0) |
@@ -205,6 +207,10 @@ See [`docs/API.md`](./API.md) for the HTTP and CLI contract shared by the PWA, t
 | fp16w-folded candidate vs fp32 canonical | ≥ 49.2 dB worst-segment SNR on every stem (first clips) |
 | Same, 2026-11-25, three of the owner's songs × 3 windows | **min 39.3 dB** (piano, *Feel Like Makin' Love*, stem −63.5 dB re mix, error −103 dB re mix); every stem above −25 dB re mix ≥ 53.5 dB. The low figures are all on stems ≤ −50 dB re mix. See MOBILE-INFERENCE-DEVELOPMENT.md, Stage V progress. |
 | Stage IV mobile graph vs fp32 canonical, 8 songs × 3 windows | min 40.1 dB (same stem); tracks fp32→fp16w within 0.8 dB on every stem, so the fp16 weights, not the Stage IV rewrites, set it |
+| **v2 promotion gate** (2026-11-25): `compare-models.ts` with the level-aware `stemParity` rule, v1 → v2, 8 songs × 3 windows, v2 opened with graph optimisation `all` (server) and `disabled` (browser) | **16 / 16 PASS**; every stem passes on SNR alone (min 40.1 dB); both settings agree to 0.1 dB on every worst case |
+| v2 server bench, 31.2 s, 4 vCPU, two quiet runs each | RTF 0.44–0.46, peak 1.50–1.59 GiB (opt all); 0.48–0.49, 1.48–1.63 GiB (opt disabled); v1 0.58–0.62, 2.76 GiB |
+| v2 CLI end to end (`models fetch` into an empty dir from the registry URLs, then `separate` a 267 s song) | both files downloaded and SHA-verified, data stored under the name the graph records; six stems |
+| v2 headless Chromium, WASM device path + forced-server path (`browser-smoke.mjs --server`) | device 6 stems in 27.6 s; **browser WASM vs server CPU 91.8 dB** (v1: 64.3 dB); server path 7 stems |
 
 ## 9. Next steps
 

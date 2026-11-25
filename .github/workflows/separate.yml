@@ -86,7 +86,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: models
-          key: model-htdemucs_6s-folded-a3f5050696cd
+          # Follows PRIMARY_SEPARATION_MODEL (id + graph sha256); ensureModel re-verifies both files either way.
+          key: model-htdemucs_6s-stage4-a343b853a287
 
       - name: Separate
         env:

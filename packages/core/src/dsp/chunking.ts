@@ -98,8 +98,16 @@ export class StreamingOverlapAdd {
   readonly #wsum: Float32Array;
   #nextChunk = 0;
 
-  constructor(plan: ChunkPlan, stems: number, channels: number) {
+  /**
+   * @param firstChunk index of the first chunk this accumulator will receive (default 0). A resumed run starts at
+   * `startChunk − 1` and discards that chunk's block: it is added only to rebuild the overlap tail (resume.ts).
+   */
+  constructor(plan: ChunkPlan, stems: number, channels: number, firstChunk = 0) {
     if (stems < 1 || channels < 1) throw new RangeError('stems and channels must be ≥ 1');
+    if (!Number.isSafeInteger(firstChunk) || firstChunk < 0 || firstChunk >= plan.chunks.length) {
+      throw new RangeError(`firstChunk must be in [0, ${plan.chunks.length}), got ${firstChunk}`);
+    }
+    this.#nextChunk = firstChunk;
     this.#plan = plan;
     this.#stems = stems;
     this.#channels = channels;

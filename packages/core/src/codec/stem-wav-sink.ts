@@ -26,12 +26,24 @@ export interface StemWavSink extends StemSink {
   finish(): StemWavSummary;
 }
 
-export function wavStemSink(stems: number, totalFrames: number, format: WavFormat, port: StemWritePort): StemWavSink {
+export interface StemWavSinkOptions {
+  /**
+   * Frames already in every stem file (header included), from `decideResume().keepFrames`. The sink appends
+   * after them and does not rewrite the header. `peaks` then cover only the frames this sink wrote.
+   */
+  readonly resumeFrom?: number;
+}
+
+export function wavStemSink(stems: number, totalFrames: number, format: WavFormat, port: StemWritePort, opts: StemWavSinkOptions = {}): StemWavSink {
   if (!Number.isSafeInteger(stems) || stems < 1) throw new RangeError(`stems must be ≥ 1, got ${stems}`);
+  const resumeFrom = opts.resumeFrom ?? 0;
+  if (!Number.isSafeInteger(resumeFrom) || resumeFrom < 0 || resumeFrom >= totalFrames) {
+    throw new RangeError(`resumeFrom must be in [0, ${totalFrames}), got ${resumeFrom}`);
+  }
   const header = encodeWavHeader(totalFrames, format);
   const frameBytes = format.channels * bytesPerSample(format.sampleFormat);
   const peaks = new Array<number>(stems).fill(0);
-  let written = 0;
+  let written = resumeFrom;
 
   return {
     async write(block: FinalizedBlock) {

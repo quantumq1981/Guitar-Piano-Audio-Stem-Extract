@@ -34,9 +34,11 @@ export interface StemSink {
 }
 
 export interface SeparationProgress {
+  /** Chunks finished, counting those a resumed run skipped. */
   readonly chunk: number;
   readonly chunks: number;
   readonly fraction: number;
+  /** Time in this call only (a resumed run's ETA is based on the chunks it ran itself). */
   readonly elapsedMs: number;
   readonly etaMs: number | null;
 }
@@ -51,6 +53,13 @@ export interface SeparateOptions {
    */
   readonly beforeChunk?: (chunk: ChunkSpan, plan: ChunkPlan) => Promise<void> | void;
   readonly now?: () => number;
+  /**
+   * First chunk to emit (default 0). For k > 0 the engine first re-runs chunk k − 1 and discards its block, which
+   * rebuilds the overlap tail exactly, so blocks from frame plan.chunks[k].start on are bit-identical to an
+   * uninterrupted run with a deterministic runner. Get k from `decideResume()`; the sink must already hold frames
+   * [0, plan.chunks[k].start).
+   */
+  readonly startChunk?: number;
 }
 
 export class SeparationAbortedError extends Error {
@@ -67,28 +76,38 @@ export async function separate(source: FrameSource, runner: SegmentRunner, sink:
   }
   const now = opts.now ?? (() => Date.now());
   const plan = planChunks(source.totalFrames, io.segmentFrames, opts.overlapRatio ?? 0.25);
-  const ola = new StreamingOverlapAdd(plan, io.stems.length, io.channels);
+  const startChunk = opts.startChunk ?? 0;
+  if (!Number.isSafeInteger(startChunk) || startChunk < 0 || startChunk >= plan.chunks.length) {
+    throw new RangeError(`startChunk must be in [0, ${plan.chunks.length}), got ${startChunk}`);
+  }
+  const ola = new StreamingOverlapAdd(plan, io.stems.length, io.channels, Math.max(0, startChunk - 1));
   const n = io.segmentFrames;
   const input = new Float32Array(io.channels * n);
   const views = Array.from({ length: io.channels }, (_, c) => input.subarray(c * n, (c + 1) * n));
   const t0 = now();
 
-  for (const chunk of plan.chunks) {
+  const process = async (chunk: ChunkSpan) => {
     if (opts.signal?.aborted) throw new SeparationAbortedError(String(opts.signal.reason ?? 'signal'));
     await opts.beforeChunk?.(chunk, plan);
     input.fill(0);
     await source.read(chunk.start, chunk.validFrames, views);
-    const output = await runner.run(input);
-    await sink.write(ola.add(chunk, output));
+    return ola.add(chunk, await runner.run(input));
+  };
+
+  if (startChunk > 0) await process(plan.chunks[startChunk - 1]!); // overlap tail only; its frames are on disk
+  const ran = startChunk > 0 ? 1 : 0;
+  for (const chunk of plan.chunks.slice(startChunk)) {
+    await sink.write(await process(chunk));
 
     const done = chunk.index + 1;
+    const runHere = done - startChunk + ran;
     const elapsedMs = now() - t0;
     opts.onProgress?.({
       chunk: done,
       chunks: plan.chunks.length,
       fraction: done / plan.chunks.length,
       elapsedMs,
-      etaMs: (elapsedMs / done) * (plan.chunks.length - done),
+      etaMs: (elapsedMs / runHere) * (plan.chunks.length - done),
     });
   }
   return plan;

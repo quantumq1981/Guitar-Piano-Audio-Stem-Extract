@@ -1,6 +1,6 @@
 # Mobile inference development — Engineering handoff
 
-Checkpoint: 2026-11-24 UTC (Stage IV; first physical iPhone pass recorded). PR #12 and the Stage IV PR stacked on it remain open; experimental work is not production-approved. Stage IV below supersedes the Stage III remaining-work list.
+Checkpoint: 2026-11-25 UTC (Stage V started: direct Stage IV vs fp32 parity measured, resume built; see "Stage V progress"). Earlier: 2026-11-24 (Stage IV; first physical iPhone pass recorded). PR #12 and the Stage IV PR stacked on it remain open; experimental work is not production-approved. Stage IV below supersedes the Stage III remaining-work list.
 
 ## Stage I — Original Claude development
 Read [CLAUDE.md](../CLAUDE.md), [original engineering specification](../Guitar%20-Piano-ASE-Separation%20App.md), [ARCHITECTURE.md](ARCHITECTURE.md), and [API.md](API.md). Preserve these historical documents. Stage I deliberately routes phones to server because native CPU peak RSS was 2.40 GiB with arena/pattern disabled, 4.7 GiB with defaults. Original browser/server parity was 64.3 dB; original server RTF 0.45–0.68 on four vCPU. Stage II investigates whether local six-stem inference can become practical without paid hosting; it does not invalidate the original safeguards.
@@ -293,6 +293,53 @@ Container: 4 vCPU. Per-window time, one 7.8 s window:
 - The real app in Playwright Chromium and WebKit. WebKit setup: `PLAYWRIGHT_BROWSERS_PATH=<scratch> node <global playwright>/cli.js install webkit && … install-deps webkit`. Use `launchPersistentContext` for a normal tab and `newContext()` for Private-Browsing behaviour.
 - Then the iPhone, in a normal tab with Low Power Mode off.
 
+### Stage V progress — 2026-11-25 (branch `claude/nice-ptolemy-rfgfsf`)
+Done in this session: the measurement that the step 1 decision needs, and step 2b (resume), both of which are needed whether the owner picks A or B. Step 0 numbers are still missing; the step 1 decision is still open.
+
+**Step 1 evidence: Stage IV vs production fp32, measured directly [M].** `compare-models.ts` (onnxruntime-node CPU, 4 threads; the candidate opened with `--candidate-graph-opt disabled`, as the browser runs it), all 8 MP3s in the repo root, 3 windows each, the three verified files (production `a3f50506…`, fp16w `1333aa4a…`, Stage IV `a343b853…` + `514978cf…`). The script now also prints each worst stem's level and its error level re mix.
+- **Minimum per stem, fp32 → Stage IV, all 8 songs: 40.1 dB** (piano, *Feel Like Makin' Love*). Next: 45.5 (piano, *Get To Know Ya*), 45.8 (drums, *Whenever Wherever Whatever*); every other song ≥ 47.8 on every stem. It passes the 40 dB contract, by 0.1 dB. The handoff's "≈ 49 dB **[E]**" was wrong.
+- **Decomposed on the three lowest songs:**
+
+  | Song, worst stem | fp32 → fp16w | fp16w → Stage IV | fp32 → Stage IV | Stem level | Error level |
+  |---|---:|---:|---:|---:|---:|
+  | *Feel Like Makin' Love*, piano | **39.3** | 59.6 | 40.1 | −63.5 dB re mix | −103.6 dB re mix |
+  | *Get To Know Ya*, piano | 45.5 | 65.9 | 45.5 | −50.1 | −95.6 |
+  | *Whenever Wherever Whatever*, drums | 45.7 | 66.3 | 45.8 | −57.8 | −103.6 |
+
+  - **The Stage IV rewrites cost nothing measurable.** fp32 → Stage IV equals fp32 → fp16w within 0.8 dB on every stem of every song. fp16w → Stage IV is ≥ 50.1 dB everywhere (≥ 59.6 on all but one near-silent bass).
+  - **The fp16-weight model alone fails the literal contract on this song (39.3 dB).** ARCHITECTURE.md's "fp16w ≥ 49.2 dB vs fp32" held on the clips it was measured on, not in general; corrected there.
+  - **Every figure below 49 dB is on a stem at −50 dB re mix or quieter** (no piano or drums in that window). The absolute error stays at about −96 to −104 dB re mix. Stems above −25 dB re mix are ≥ 53.1 dB. Errors on loud stems reach about −63 dB re mix (fp16 weight rounding).
+  - **Why this matters for the contract:** per-stem SNR on a near-silent stem measures how quiet the stem is. It is the same effect as the tone fixture (above), now on real music. For comparison: native vs native errors are about −140 dB re mix, and the WASM reduction defect that Stage IV fixed produced errors up to −61 dB re mix.
+- **Proposal for the owner (not applied):** keep 40 dB SNR as the rule, and also pass a stem whose error is ≤ −90 dB re mix (equivalently: quiet stems are judged by absolute error). On these data every case then passes with ≥ 5.6 dB margin, and the old WASM defect (−61 dB) still fails. Without an amendment, option A promotes an artifact whose own fp16 source fails the contract on a real song, and any new song may fail it.
+
+**Step 2b: resume a stopped run — built [M].**
+- **Core (`packages/core/src/separation/resume.ts`, headless-tested):**
+  - `separate({ startChunk })`: re-runs chunk k − 1 into a fresh accumulator only to rebuild the overlap tail, discards its block, then continues. The proof is in the file header: before chunk k − 1 is added, its accumulator region [S, N) is zero, and O < S, so the tail depends on chunk k − 1 alone. `StreamingOverlapAdd` takes a first chunk index.
+  - `decideResume(manifest, expectation, sizes)`: from file sizes only. It trusts whole frames, up to the last stride boundary every stem reached. That covers a write torn mid-block, stems that stopped at different blocks, and a missing or torn header (restart at 0). Model, geometry, format, stem order or input mismatch → `unusable` with a reason, never a wrong resume.
+  - `RunManifest` (`run.json`, strict type guard `isRunManifest`), `interleavedFileSource` / `encodeInterleavedF32` (stored song, float32 LE interleaved, lossless), `wavStemSink(..., { resumeFrom })`, `runStorageNeed` (the storage `need` moved from the card into core, now counting the stored song), `STAGE4_RESUME_EXPECTATION`.
+  - Tests (`packages/core/test/resume.test.ts`, 18): stop before every chunk of five song lengths, decide from the real byte sizes, truncate, resume → **stem files byte-identical** to an uninterrupted run; torn writes; mismatches; manifest fuzzing. Mutation check: removing the tail re-run fails 4 of the 5 multi-chunk cases (and the ETA test).
+- **Worker (`mobile-stage4.worker.ts`):**
+  - A new song is first written to OPFS as `input.f32` (1 MiB blocks), then `run.json`, then windows are read back from the file. The worker drops its copy of the song after that, so its memory no longer includes the decoded song (not measured on a device).
+  - `resume` reads the sizes, truncates and continues. The stored song is deleted when the stems are complete.
+  - Resuming at another thread count is allowed and logged. Quality is the same (≥ 84 dB at every count), but bit-identity at the seam is only guaranteed at the same count.
+- **Card:** after a stop, a reload or a killed tab, it shows "N of M windows are finished" and a **Resume** button with the time left. It says that switching apps or locking the phone stops the run. Download names come from `run.json`, so they survive a reload. A killed tab still shows "Previous test was interrupted" first: acknowledge it, then Resume.
+- **Real app, headless Chromium, 4 threads, 45 s of *D'Angelo – Lady* (8 windows)** (`scripts/e2e/stage4-resume.mjs`): **PASS.**
+  - Run A, uninterrupted: 8 windows, about 60 s, heap 515–613 MiB reserved / 491–507 MiB touched.
+  - Run B: stopped by a hidden page after window 2, then reloaded, and the card offered "2 of 8 windows are finished". Resumed. Then the renderer was **crashed** mid-window 6 (CDP `Page.crash`, so no events run). A new tab showed the interruption marker and "5 of 8"; it was acknowledged and resumed to the end.
+  - All six stems are **byte-identical** (SHA-256) to run A, and `input.f32` was removed.
+  - **Bug the test found, now fixed:** `Worker.terminate()` releases OPFS sync-access-handle locks asynchronously. Resume 250 ms after a stop failed with `NoModificationAllowedError`. The worker now retries the lock (50 ms … 3.2 s, about 6 s in total). The page's scan tells "locked" from "missing", so it never shows a false "0 of 8", and it rescans until the locks clear.
+  - **Test gotcha:** in Chromium a reload or navigation is not a kill. It fires `visibilitychange` first, so the card stops cleanly. Use `Page.crash`.
+  - **WebKit (JavaScriptCore, persistent profile, 4 threads, `--webkit`): PASS.**
+    - Same steps; the kill is approximated by closing the whole browser mid-window 6. WebKit ran the page-hidden stop first, so no interruption marker was left.
+    - Resume point "5 of 8", and all six stems byte-identical to WebKit's own uninterrupted run.
+    - Chromium and WebKit hashes differ from each other (different float kernels, as before); each engine is exact against itself.
+    - One benign console line ("access control checks" on a blob URL): an `<audio>` element whose object URL the rescan had revoked.
+- **Storage cost:** the stored song is 8 bytes per frame, about 85 MB for 4 min (+22 % over the 24-bit stems), held only until the stems are complete. The quota check counts it.
+- **Not done:** whether iOS freezes or kills a hidden tab's worker (the card still stops on hide; resume makes that cheap); the physical-iPhone test.
+- **Not run here:** `python -m unittest scripts/test_mobile_memory.py` (the sandbox has no `onnx` package; no Python changed; CI runs it).
+
+**Next session:** ask the owner for step 0 numbers and the step 1 decision (A or B, and the parity amendment above), then steps 2 (routing, limits, memory projection), 3 and 4.
+
 **Later (unchanged):** further exact memory cuts (chunk the frequency-branch DConv along its 512-row batch; run the ISTFT tail per source; both remove 63 MiB tensors); other devices (iPads, older iOS → ORT 1.23.2, Android Chrome); WebGPU (static shapes, shader-f16, GPU-process memory on iOS).
 
 ## Stage IV — remaining work (historical list; Stage V above supersedes items 1, 2 and 4)
@@ -315,7 +362,7 @@ Potential Bandleader HQ integration with Tab Translator Pro, Chord Sheet Maker P
 ## Fresh-session prompt
 Read CLAUDE.md, docs/ARCHITECTURE.md and this file (main branch; all Stage IV work through PR #19 is merged). Check the latest PRs and Actions runs before changing anything. Start Stage V:
 1. Ask the owner for the step 0 iPhone thread results if they are not recorded here.
-2. Ask for the step 1 model-policy decision (A or B) before writing code.
-3. Build steps 2–4 as one reviewed PR, or a few small ones.
+2. Ask for the step 1 model-policy decision (A or B) before writing code, together with the parity-rule amendment in "Stage V progress" (the direct measurement is done: min 40.1 dB, set by the fp16 weights on a near-silent stem).
+3. Step 2b (resume) is built; build steps 2–4 as one reviewed PR, or a few small ones.
 
 Keep main-app routing for non-phone devices and the server path working. Do not repeat completed experiments. Tag numbers [M]/[V]/[E], and do not claim device results from Chromium or WebKit runs. Record measured results here as work progresses. Tab Translator Pro is not attached; its lessons are in the section above.

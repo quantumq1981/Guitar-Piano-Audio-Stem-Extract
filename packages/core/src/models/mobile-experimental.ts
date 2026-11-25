@@ -8,6 +8,7 @@
  * on the music fixture, WASM heap ≤ 616 MiB. It is not yet measured on a physical phone.
  */
 import { HTDEMUCS_6S_FOLDED_FP16W, requireIO, type ModelIO } from './registry.ts';
+import type { ResumeExpectation } from '../separation/resume.ts';
 
 export interface PinnedFile {
   /** File name under `<base>/models/`. The graph records the data file's name, so it must not be renamed. */
@@ -48,6 +49,18 @@ export const MOBILE_STAGE4_CANDIDATE: ExternalDataArtifact = {
   },
   io: requireIO(HTDEMUCS_6S_FOLDED_FP16W),
   session: { graphOptimizationLevel: 'disabled', enableMemPattern: false, enableCpuMemArena: false, numThreads: 1 },
+};
+
+/** What a stored on-device run must match to be resumed with this artifact (core decideResume). The engine's
+ * default 25 % overlap; changing it, the stem order or the graph makes older stored runs unusable, never wrong. */
+export const STAGE4_RESUME_EXPECTATION: ResumeExpectation = {
+  modelId: MOBILE_STAGE4_CANDIDATE.id,
+  graphSha256: MOBILE_STAGE4_CANDIDATE.graph.sha256,
+  sampleRate: MOBILE_STAGE4_CANDIDATE.io.sampleRate,
+  channels: MOBILE_STAGE4_CANDIDATE.io.channels,
+  segmentFrames: MOBILE_STAGE4_CANDIDATE.io.segmentFrames,
+  overlapRatio: 0.25,
+  stems: MOBILE_STAGE4_CANDIDATE.io.stems,
 };
 
 /**

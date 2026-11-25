@@ -18,6 +18,8 @@
 - `npm test` (vitest, all workspaces) · `npm run typecheck` (tsc 7 strict, per package) · `npm run build:web`
 - `npm run models:fetch` → `models/htdemucs_6s-folded.onnx` (gitignored, sha256-pinned in the registry)
 - Real separation: `node packages/server/src/cli.ts separate <file> --scope guitar --format wav24`
+- Resume E2E: copy the Stage IV pair into `apps/web/dist/models/`, `vite preview --port 4173`, then
+  `NODE_PATH=/opt/node-tools/node_modules node scripts/e2e/stage4-resume.mjs http://localhost:4173 <clip.wav> --threads 4`
 - Browser E2E: build web with `VITE_MODEL_MIRROR=/__models`, hard-link the model to `apps/web/dist/__models/<sha256>.onnx`,
   `vite preview --port 4173`, `stemsplit serve`, then `node scripts/e2e/browser-smoke.mjs http://localhost:4173 <clip.wav> <server-vocals.wav> --server`
 
@@ -37,6 +39,8 @@
   (`packages/core/src/codec/stem-wav-sink.ts`); main-app routing is unchanged (phones still go to the server). The page scans
   OPFS on load and after every run (`storedStem` = complete / partial / invalid from the header + size), so a stopped run's
   files can be deleted. It frees old stems BEFORE the quota check: otherwise a phone near its quota fails every retry.
+  A run stores the song as `input.f32` + `run.json` first, so a stopped/killed run can **Resume** (core `decideResume`,
+  bit-identical; changing the overlap, stem order or graph makes stored runs `unusable`, never wrong).
   Safari Private Browsing (WebKit ephemeral session) rejects `navigator.storage.getDirectory()` with UnknownError
   "unknown transient reason (e.g. out of memory)" while `estimate()` still reports a 1 GiB quota. The card probes
   `getDirectory()` on load and disables the song path with an explanation (measured in Playwright WebKit).
@@ -50,6 +54,8 @@
 - One model artifact everywhere. Changing it = new registry entry with sha256 + parity (≥ 40 dB SNR, `compare-models.ts`) and switching all tiers at once.
 - Every job status change goes through `transition()`; never assign `status` directly.
 - Tag numbers in docs as [M]easured / [V]endor / [E]stimate. Do not present estimates as facts.
+- Per-stem SNR on a stem ≤ −50 dB re mix measures how quiet the stem is, not model error: read `compare-models.ts`'s
+  error-re-mix column too (real music, 2026-11-25: fp16w vs fp32 is 39.3 dB at −63.5 dB re mix, error −103.6 dB re mix).
 - ORT sessions: `enableCpuMemArena: false`, `enableMemPattern: false` (measured 2.4 GiB vs 4.7 GiB peak).
 - Mobile graphs (Stage IV, measured): onnxruntime-web sums long float32 reductions less accurately than native (77-81 vs 101-107 dB
   vs float64); any graph run in WASM needs two-level ReduceMean/GroupNorm (`--accurate-reductions`) to meet the 40 dB contract.
@@ -58,7 +64,20 @@
   shapes, +183 MiB even dynamic). Web/Node bindings cannot disable it: keep `opaque_shapes`, graph optimisation disabled, and never
   ship `--static-shapes` for WASM. Measure WASM memory as touched pages, not `buffer.byteLength` (geometric growth slack).
 - Inference worker must not install `onmessage` when `self.name` starts with `em-pthread` (ORT thread re-entry deadlock).
+- `Worker.terminate()` releases OPFS sync-access-handle locks asynchronously (Chromium, measured): retry
+  `NoModificationAllowedError` when reopening a stopped run's files. In Chromium a reload is not a kill (visibilitychange
+  fires first); E2E kills use CDP `Page.crash`.
 - The MP3s in the repo root are the owner's test material; never commit derived stems (`out/` is gitignored).
+
+## Status (2026-11-25, later) — Stage V started; waiting on the owner
+- Measured Stage IV vs production fp32 directly (8 songs × 3 windows, `compare-models.ts --candidate-graph-opt disabled`):
+  min 40.1 dB per stem, on a near-silent piano (−63.5 dB re mix). fp32 → fp16w alone gives 39.3 dB there: the fp16 weights,
+  not the Stage IV rewrites, set it (fp32→Stage IV tracks fp32→fp16w within 0.8 dB). Every sub-49 dB stem is ≤ −50 dB re mix,
+  error ≈ −96…−104 dB re mix. Proposed (owner decides): pass a stem at ≥ 40 dB SNR OR error ≤ −90 dB re mix.
+- Step 2b built: resumable on-device runs (`separation/resume.ts`: `separate({startChunk})`, `decideResume`, `run.json`,
+  song stored in OPFS as `input.f32`, deleted when the stems are complete). Byte-identical to an uninterrupted run (unit tests at
+  every stop point + `scripts/e2e/stage4-resume.mjs` in Chromium and WebKit). The card shows Resume after a stop, reload or killed tab.
+- Still open: step 0 iPhone thread numbers; step 1 A/B decision plus the parity amendment; steps 2–4.
 
 ## Status (2026-11-25) — next: Stage V in the handoff
 On-device full songs work on the owner's iPhone (Safari, normal tab, 1 thread, experimental card):

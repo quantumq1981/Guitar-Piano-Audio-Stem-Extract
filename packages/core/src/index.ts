@@ -13,3 +13,4 @@ export * from './memory/budget.ts';
 export * from './api/contract.ts';
 export * from './jobs/state-machine.ts';
 export * from './separation/engine.ts';
+export * from './separation/resume.ts';

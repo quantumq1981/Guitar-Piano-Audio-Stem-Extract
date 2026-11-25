@@ -63,7 +63,8 @@
 ## Status (2026-11-25) — next: Stage V in the handoff
 On-device full songs work on the owner's iPhone (Safari, normal tab, 1 thread, experimental card):
 - 43.2 s: 8 windows, heap 616 MiB reserved / 508-510 touched, flat (Low Power Mode on: ~23 s per window).
-- ~6.7 min with Low Power Mode off: 69/69 windows in ~15 min (~13 s per window, owner report), ~640 MB of 24-bit stems.
+- ~6.7 min with Low Power Mode off: STOPPED, not completed. The owner left Safari, and the card stops a run when the page is
+  hidden. "~15 min" was the card's estimate, not a measurement. No long song has completed on the phone yet; resume is Stage V step 2b.
 - Private Browsing blocks OPFS; the card explains it (#18). The stored-stem cleanup is #17.
 - The threads selector (#19) is live; iPhone 1/2/4-thread numbers are still to be measured (Stage V step 0).
 - Open owner decision: Stage IV as the one artifact on every tier (A, recommended) or a phone-only exception (B).

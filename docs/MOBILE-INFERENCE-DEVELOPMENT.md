@@ -226,12 +226,12 @@ The owner ran the song test in a normal Safari tab, after the private-window fai
 
 The Safari version was not in the screenshots.
 
-### Full-power 6.7-min song on the iPhone — 2026-11-25 **[M]**, from the owner's report
-With Low Power Mode off, at 1 thread, the owner separated a ~6.7-min song: 69 of 69 windows, six stems, no failure.
-- **Length:** 69 windows corresponds to 400–405 s of audio.
-- **Time:** "about 15 minutes" by the owner's account, so ≈ 13 s per window, ≈ 2.2× the song length. That matches the window test (11.9–12.9 s). The log was not captured, so the heap per window is not recorded.
-- **Memory:** the run lasted 69 windows (~15 min) without the tab being killed. The heap stays flat per window (as above), so song length does not raise the memory risk.
-- **Storage is now the cost:** six 24-bit stereo stems of 400–405 s are 635–644 MB in OPFS (computed).
+### ~6.7-min song on the iPhone — 2026-11-25: stopped, not completed
+With Low Power Mode off, at 1 thread, the owner started a ~6.7-min song (69 windows, i.e. 400–405 s of audio) and then left Safari. The card stops a run when the page is hidden ("Stopped: page hidden"), so it did not finish. How many windows completed is not recorded; the card keeps its log in localStorage, so the next run overwrites it.
+- **Nothing was measured.** The "about 15 minutes" came from the card's own estimate (69 × 12.5 s), not from a run.
+- **Still measured so far:** the longest completed device run is the 43.2 s song (8 windows, above). Per-window time at full power is known only from the window test (11.9–12.9 s at 1 thread).
+- **Not yet proven on the phone:** a long song run to completion, its memory over many windows, and ≈ 640 MB of stems written (six 24-bit stereo stems of 400–405 s, computed).
+- **Product finding:** a long song needs about 15 min of foreground time, and nothing tells the user that leaving stops the run. iOS also suspends background tabs, and may kill them under memory pressure, so a run cannot simply continue in the background. Stage V therefore includes resuming a stopped run (step 2b).
 
 ### WASM threads (experimental card selector) **[M]**
 ORT's WASM build runs multi-threaded when the page is cross-origin isolated, which Pages already is (`public/sw.js`). The card now has a **WASM threads** selector: 1 / 2 / 4, remembered per device, default 1. `stage4Threads()` in core lowers the request to 1 on a non-isolated page and caps it at `navigator.hardwareConcurrency`. The log's session line names the thread count that was actually used.
@@ -251,9 +251,9 @@ Container: 4 vCPU. Per-window time, one 7.8 s window:
 - **Not measured yet:** the iPhone. It has performance and efficiency cores and reports 4 to the page, so expect less than the container's scaling. The selector is live on Pages (PR #19); measuring it is Stage V step 0.
 
 ## Stage V — the next stage: on-device separation in the main app (handoff for the next session)
-**Goal:** a phone gets free, private six-stem separation in the normal UI, with no server. Today the main app sends every phone to a server (`phone_form_factor` is a hard blocker in `packages/core/src/capability/routing.ts`). The free Pages build has no server (`API_BASE === null`), so on a phone the main app cannot separate at all; only the experimental card can. Everything Stage V needs has been proven in that card: memory flat over 69 windows, OPFS streaming, ≈ 13 s per window at 1 thread on the iPhone, identical parity at 1/2/4 threads.
+**Goal:** a phone gets free, private six-stem separation in the normal UI, with no server. Today the main app sends every phone to a server (`phone_form_factor` is a hard blocker in `packages/core/src/capability/routing.ts`). The free Pages build has no server (`API_BASE === null`), so on a phone the main app cannot separate at all; only the experimental card can. Proven in that card on the iPhone: a full 43.2 s song (8 windows, heap flat), OPFS streaming and playback, and 11.9–12.9 s per window at 1 thread (window test). Proven in Chromium and WebKit: identical parity at 1/2/4 threads. **Not yet proven on the phone: a long song run to completion.**
 
-**Step 0 — iPhone thread test (owner, ~5 min, before code).** Low Power Mode off. In the experimental card, set WASM threads to 1, 2 and 4 and run "Stage IV: load + 1 window" once each. Record the "Window 1 PASS in …" seconds and the heap line. The fastest count whose heap stays at or below ≈ 620 MiB becomes the default (`MOBILE_STAGE4_CANDIDATE.session.numThreads`, `STAGE4_THREAD_OPTIONS`).
+**Step 0 — iPhone thread test (owner, ~5 min, before code).** Low Power Mode off. In the experimental card, set WASM threads to 1, 2 and 4 and run "Stage IV: load + 1 window" once each. Record the "Window 1 PASS in …" seconds and the heap line. The fastest count whose heap stays at or below ≈ 620 MiB becomes the default (`MOBILE_STAGE4_CANDIDATE.session.numThreads`, `STAGE4_THREAD_OPTIONS`). Then, at that count, run a 4–7-min song **to completion**, keeping Safari in the foreground with the screen on, and capture the end of the log. This is the long-run measurement that is still missing.
 
 **Step 1 — owner decision: model policy (ask before writing code).** The rule is one artifact on every tier.
 - **(A) Recommended: Stage IV becomes the single artifact everywhere.** The parity chain, with the contract at 40 dB per stem:
@@ -274,6 +274,13 @@ Container: 4 vCPU. Per-window time, one 7.8 s window:
 - **Limits:** `LOCAL_LIMITS.maxDurationSecWasm = 30` predates streaming; replace it with a measured cap. ≈ 13 s per 5.85 s of song at 1 thread puts a 10-min song at ≈ 22 min; pick a cap with the owner. Add a storage check: stems need stems × (44 + frames × 2 channels × 3 bytes), so move that `need` calculation from `MobileBenchmark.tsx` into core.
 - **Memory projection:** `projectPeakMemory` assumes `inputCopies: 2, retainedOutputStems: 6`. With OPFS streaming, retained stems are ≈ 0. Model the Stage IV heap as measured (616 MiB reserved / 510 MiB touched on the iPhone), plus the decoded input (≈ 85 MB for 4 min).
 - **Stem choice:** on the device only `full` (six stems) exists; `guitar` (lead/rhythm) stays server-only. To save storage, let the user pick which stems to keep and write only those. All six are computed anyway; only writing is skipped.
+
+**Step 2b — resume a stopped run (owner's 6.7-min run was lost by switching apps).** Today `MobileBenchmark.tsx` terminates the worker on `visibilitychange` (hidden), and the stems so far stay in OPFS as `partial`.
+- **Resume.** The stems are written in order, so a partial file holds every frame up to the last finalised block: frames written = (size − 44) / frame bytes, and `storedStem` already gives the expected total. On return, restart the engine at the window covering the first unwritten frame, recompute the window before it (the overlap-add needs its tail) and append.
+- **Core (pure, tested).** `separate()` needs a start option (a chunk index or frame). The test: a resumed run must equal an uninterrupted run bit for bit.
+- **Keep the input.** The decoded song must survive a reload: store it in OPFS (float32 or 16-bit PCM; validate if lossy), or re-decode the original file the user picks again, checked by size + hash.
+- **Possibly don't terminate on hide.** iOS freezes a backgrounded tab's JavaScript, and if the tab is not killed, the worker can continue on return. Measure this on the device. Resume covers the killed case either way.
+- **UX.** Say plainly that leaving Safari pauses or stops the run, show "Resume" for a partial run, and keep the wake lock.
 
 **Step 3 — web.**
 - **Main worker:** `apps/web/src/inference/worker.ts` loads one file with `graphOptimizationLevel: 'all'` and up to 4 threads. For Stage IV it must use the settings from `mobile-stage4.worker.ts`: graph optimisation disabled, external data, the capped `WebAssembly.Memory` and the `em-pthread` guard. The simplest route is to move that worker's session code into the main path.

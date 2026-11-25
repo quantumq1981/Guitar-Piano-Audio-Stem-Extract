@@ -60,7 +60,7 @@ Server-only means routing always sends the job to the server.
 - `revision` is monotonic; clients long-poll with `?since=revision`.
 - `queuePosition`, `progress {stage, fraction}` and `etaSec` drive the UI.
 - `modelSha256` names the artifact that produced the stems.
-- `stems[]` entries are `{stem, format, bytes, url, expiresAt, producedBy}`. `producedBy` names the model and any heuristic, for example `htdemucs_6s-folded@…+spatial-similarity-v0`.
+- `stems[]` entries are `{stem, format, bytes, url, expiresAt, producedBy}`. `producedBy` names the model and any heuristic, for example `htdemucs_6s-stage4@…+spatial-similarity-v0`.
 - `warnings[]` codes: `lead_rhythm_heuristic`, `piano_refinement_unavailable`, `input_resampled`, `input_downmixed`, `input_upmixed`, `clipping_in_output`.
 - `error` is `{code, message, retryable}`. Codes: `input_too_long`, `decode_failed`, `inference_failed`, `unsupported_format`, `internal`, and others.
 
@@ -82,7 +82,7 @@ Server-only means routing always sends the job to the server.
 The CLI uses the same engine and model as the server.
 
 ```bash
-npm run models:fetch                                   # download + sha256-verify the canonical model
+npm run models:fetch                                   # download + sha256-verify the canonical model (graph + external data)
 node packages/server/src/cli.ts separate song.mp3 --scope guitar --format wav24,mp3 -o out/song
 node packages/server/src/cli.ts serve --port 8787 --data .data/jobs   # env: STEMSPLIT_SIGNING_SECRET, STEMSPLIT_PUBLIC_URL, STEMSPLIT_CORS_ORIGIN
 node packages/server/src/cli.ts submit song.mp3 --server http://localhost:8787 --scope full

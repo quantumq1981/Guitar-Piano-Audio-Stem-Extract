@@ -18,6 +18,9 @@ const dataFile = process.env.ORT_MODEL_DATA ? basename(process.env.ORT_MODEL_DAT
 // CPU output of the source model) and <prefix>-candidate.bin (native CPU output of the model under test).
 const fixture = basename(process.env.ORT_FIXTURE || 'reference');
 const runCount = Math.max(1, Number(process.env.ORT_RUNS || (validate ? 3 : 1)));
+// ORT_THREADS > 1 runs the WASM provider multi-threaded. That needs SharedArrayBuffer, so the server then sends
+// the cross-origin isolation headers (Pages gets them from public/sw.js).
+const wasmThreads = Math.max(1, Math.floor(Number(process.env.ORT_THREADS || 1)));
 const fixtureFiles = new Set([
   '/' + modelFile, ...(dataFile ? ['/' + dataFile] : []),
   ...['input', 'source', 'candidate'].map(kind => `/${fixture}-${kind}.bin`),
@@ -25,6 +28,10 @@ const fixtureFiles = new Set([
 
 const server = createServer((req, res) => {
   const name = new URL(req.url, 'http://localhost').pathname;
+  if (wasmThreads > 1) {
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+    res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+  }
   if (name === '/') {
     res.setHeader('Content-Type', 'text/html');
     res.end('<html><body>Mobile inference benchmark</body></html>');
@@ -99,7 +106,7 @@ function setPhase(next, wasmHeapBytes) {
 
 let browser;
 let timer;
-console.log(JSON.stringify({ event: 'runtime', provider, pinned, version, wasmThreads: 1, model: modelFile, externalData: dataFile || null, fixture: validate ? fixture : null, runs: runCount }));
+console.log(JSON.stringify({ event: 'runtime', provider, pinned, version, wasmThreads, model: modelFile, externalData: dataFile || null, fixture: validate ? fixture : null, runs: runCount }));
 try {
   browser = await chromium.launch({
     args: ['--enable-unsafe-webgpu', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
@@ -122,13 +129,14 @@ try {
   setPhase('baseline');
   timer = setInterval(sampleMemory, 250);
 
-  const result = await page.evaluate(async ({ provider, validate, modelFile, dataFile, fixture, runCount }) => {
+  const result = await page.evaluate(async ({ provider, validate, modelFile, dataFile, fixture, runCount, wasmThreads }) => {
     const mark = name => window.markBenchmarkPhase(name, window.wasmHeapBytes());
     if (provider === 'webgpu' && (!navigator.gpu || !await navigator.gpu.requestAdapter())) {
       throw Error('No WebGPU adapter in CI');
     }
     const ort = await import(provider === 'wasm' ? '/ort.wasm.min.mjs' : '/ort.webgpu.bundle.min.mjs');
-    ort.env.wasm.numThreads = 1;
+    if (wasmThreads > 1 && !crossOriginIsolated) throw Error('ORT_THREADS > 1 needs a cross-origin isolated page');
+    ort.env.wasm.numThreads = wasmThreads;
     await mark('session-create');
     const start = performance.now();
     const session = await ort.InferenceSession.create('/' + modelFile, {
@@ -237,7 +245,7 @@ try {
       await mark('session-cleanup');
       await session.release();
     }
-  }, { provider, validate, modelFile, dataFile, fixture, runCount });
+  }, { provider, validate, modelFile, dataFile, fixture, runCount, wasmThreads });
   console.log(JSON.stringify({ event: 'result', provider, pinned, version, model: modelFile, ...result }));
   if (!result.pass) process.exitCode = 1;
 } finally {

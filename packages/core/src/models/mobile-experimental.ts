@@ -7,15 +7,10 @@
  * SHA-256s for both files. Measured in Chromium (WASM, one thread): parity vs native source ≥ 61.9 dB per stem
  * on the music fixture, WASM heap ≤ 616 MiB. It is not yet measured on a physical phone.
  */
-import { HTDEMUCS_6S_FOLDED_FP16W, requireIO, type ModelIO } from './registry.ts';
+import { HTDEMUCS_6S_FOLDED_FP16W, HTDEMUCS_6S_STAGE4, requireIO, type ModelIO, type PinnedFile } from './registry.ts';
 import type { ResumeExpectation } from '../separation/resume.ts';
 
-export interface PinnedFile {
-  /** File name under `<base>/models/`. The graph records the data file's name, so it must not be renamed. */
-  readonly file: string;
-  readonly bytes: number;
-  readonly sha256: string;
-}
+export type { PinnedFile };
 
 export interface ExternalDataArtifact {
   readonly id: string;
@@ -34,20 +29,13 @@ export interface ExternalDataArtifact {
   };
 }
 
+/** The experimental card's view of the primary artifact: the same pinned bytes as HTDEMUCS_6S_STAGE4. */
 export const MOBILE_STAGE4_CANDIDATE: ExternalDataArtifact = {
-  id: 'htdemucs_6s-mobile-stage4',
+  id: HTDEMUCS_6S_STAGE4.id,
   sourceSha256: HTDEMUCS_6S_FOLDED_FP16W.sha256 ?? '',
-  graph: {
-    file: 'candidate-memory.onnx',
-    bytes: 1_201_735,
-    sha256: 'a343b853a28752f05e7188b42b4d1724d97de8ea3057d225bd8a4d76f7fc1110',
-  },
-  data: {
-    file: 'candidate-memory.onnx.data',
-    bytes: 129_090_048,
-    sha256: '514978cfe52041f8272a52f91510b5f930cf9bc90504fccd5a51800f976069db',
-  },
-  io: requireIO(HTDEMUCS_6S_FOLDED_FP16W),
+  graph: { file: 'candidate-memory.onnx', bytes: HTDEMUCS_6S_STAGE4.bytes!, sha256: HTDEMUCS_6S_STAGE4.sha256! },
+  data: { file: HTDEMUCS_6S_STAGE4.externalData!.file, bytes: HTDEMUCS_6S_STAGE4.externalData!.bytes, sha256: HTDEMUCS_6S_STAGE4.externalData!.sha256 },
+  io: requireIO(HTDEMUCS_6S_STAGE4),
   session: { graphOptimizationLevel: 'disabled', enableMemPattern: false, enableCpuMemArena: false, numThreads: 1 },
 };
 
@@ -94,7 +82,7 @@ export const WASM_PAGE_BYTES = 65_536;
  * and on a phone already holding the page that reservation can fail (seen in Tab Translator Pro on iPhone).
  * The Stage IV candidate's heap peaks at 616 MiB in Chromium, so 1 GiB and then 768 MiB leave room.
  */
-export const WASM_CAP_LADDER_PAGES: readonly number[] = [16_384, 12_288];
+export const WASM_CAP_LADDER_PAGES: readonly number[] = HTDEMUCS_6S_STAGE4.browserWasmMemoryCapPages!;
 
 /** Structural `WebAssembly.MemoryDescriptor` (core is built without DOM types). Sizes are in pages. */
 export interface WasmMemoryDescriptor {

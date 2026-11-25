@@ -6,7 +6,7 @@
  * judgement awaiting on-device measurement and must not be presented as fact.
  */
 import type { ExecutionProvider, ModelArtifact } from '../models/registry.ts';
-import { requireIO } from '../models/registry.ts';
+import { downloadBytes, requireIO } from '../models/registry.ts';
 import type { CapabilitySnapshot } from '../capability/probe.ts';
 
 export type Provenance = 'measured' | 'estimate' | 'policy';
@@ -133,9 +133,10 @@ export interface ProjectionInput {
 }
 
 export function projectPeakMemory({ model, ep, inputFrames, streamInput, retainedOutputStems = 0, inputCopies = 1 }: ProjectionInput): MemoryProjection {
-  if (model.bytes === null) throw new Error(`Model ${model.id} has no pinned size; cannot budget it`);
+  const total = downloadBytes(model); // graph + external data: the weights live in the data file
+  if (total === null) throw new Error(`Model ${model.id} has no pinned size; cannot budget it`);
   const io = requireIO(model);
-  const weightsBytes = model.bytes;
+  const weightsBytes = total;
   const copies = SESSION_CREATE_WEIGHT_COPIES[ep];
   const act = ACTIVATION_PEAK_BYTES[ep];
 

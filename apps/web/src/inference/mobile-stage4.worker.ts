@@ -16,7 +16,6 @@ import {
   RUN_MANIFEST_FILE,
   RUN_MANIFEST_VERSION,
   STAGE4_RESUME_EXPECTATION,
-  capWasmMemoryDescriptor,
   decideResume,
   encodeInterleavedF32,
   interleavedFileSource,
@@ -27,13 +26,13 @@ import {
   stage4TestSignal,
   stemFormatOf,
   stage4Threads,
-  touchedBytes,
   wavStemSink,
   WASM_CAP_LADDER_PAGES,
   type PinnedFile,
   type RunManifest,
   type SegmentRunner,
 } from '@stemsplit/core';
+import { installWasmMemoryCap } from './wasm-memory.ts';
 import { STAGE4_STEM_DIRECTORY, STAGE4_STEM_SAMPLE_FORMAT, type Stage4Request, type Stage4Message } from './stage4-protocol.ts';
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -44,33 +43,8 @@ const mib = (bytes: number) => (bytes / 2 ** 20).toFixed(0) + ' MiB';
 const clock = (ms: number) => `${Math.floor(ms / 60_000)}:${String(Math.round(ms / 1000) % 60).padStart(2, '0')}`;
 
 // Track (and cap) every WebAssembly.Memory this worker creates. Installed before ORT is imported.
-const memories: WebAssembly.Memory[] = [];
-let capNote = 'no shared memory requested';
-const NativeMemory = WebAssembly.Memory;
-function CappedMemory(descriptor: WebAssembly.MemoryDescriptor): WebAssembly.Memory {
-  let lastError: unknown;
-  for (const cap of WASM_CAP_LADDER_PAGES) {
-    const capped = capWasmMemoryDescriptor(descriptor, cap);
-    try {
-      const memory = new NativeMemory(capped);
-      memories.push(memory);
-      capNote = capped === descriptor ? 'requested maximum kept' : `maximum capped at ${mib(cap * 65_536)}`;
-      return memory;
-    } catch (error) {
-      if (!(error instanceof RangeError) || capped === descriptor) throw error;
-      lastError = error;
-    }
-  }
-  throw lastError;
-}
-CappedMemory.prototype = NativeMemory.prototype;
-(WebAssembly as unknown as { Memory: unknown }).Memory = CappedMemory;
-
-function heap(): string {
-  const reserved = memories.reduce((sum, m) => sum + m.buffer.byteLength, 0);
-  const touched = memories.reduce((sum, m) => sum + touchedBytes(m.buffer), 0);
-  return `WASM heap ${mib(reserved)} (touched ${mib(touched)})`;
-}
+const wasmMemory = installWasmMemoryCap(WASM_CAP_LADDER_PAGES);
+const heap = () => wasmMemory.heap();
 
 async function fetchVerified(file: PinnedFile): Promise<Uint8Array> {
   const response = await fetch(import.meta.env.BASE_URL + 'models/' + file.file);
@@ -110,7 +84,7 @@ async function openSession(requestedThreads: number): Promise<{ ort: Ort; sessio
   });
   graph = null;
   data = null;
-  report(`Session ready in ${((performance.now() - start) / 1000).toFixed(1)} s · ${heap()} · ${capNote}`);
+  report(`Session ready in ${((performance.now() - start) / 1000).toFixed(1)} s · ${heap()} · ${wasmMemory.capNote}`);
   return { ort, session };
 }
 

@@ -8,7 +8,8 @@
   node:http API, CLI (`src/cli.ts`). `scripts/` holds measurement tools (mem-probe, compare-models, segment-consistency).
 - `apps/web` — Tier 2 React PWA: capability probe, inference worker (onnxruntime-web), server client, stem player, SW.
 - `docs/ARCHITECTURE.md` (design + measured numbers), `docs/API.md` (contract). `scripts/fold_webgpu.py`, `scripts/e2e/`.
-- Mobile inference research (experimental, not production): `docs/MOBILE-INFERENCE-DEVELOPMENT.md` is the handoff. Read it first.
+- Mobile inference (experimental card on Pages, not yet in the main app): `docs/MOBILE-INFERENCE-DEVELOPMENT.md` is the handoff;
+  its "Stage V" section is the next stage (on-device separation in the main app). Read it first.
   `scripts/mobile_graph.py` (PR #12 folding), `scripts/mobile_memory.py` (Stage IV exact memory passes, two-level reductions,
   live-memory simulator; tests `python -m unittest scripts/test_mobile_memory.py`), `scripts/mobile_fixture.py` (licence-free
   six-stem music fixture), `scripts/mobile-webgpu-check.mjs` (Chromium WASM/WebGPU gate), `.github/workflows/mobile-graph.yml`.
@@ -59,6 +60,16 @@
 - Inference worker must not install `onmessage` when `self.name` starts with `em-pthread` (ORT thread re-entry deadlock).
 - The MP3s in the repo root are the owner's test material; never commit derived stems (`out/` is gitignored).
 
+## Status (2026-11-25) — next: Stage V in the handoff
+On-device full songs work on the owner's iPhone (Safari, normal tab, 1 thread, experimental card):
+- 43.2 s: 8 windows, heap 616 MiB reserved / 508-510 touched, flat (Low Power Mode on: ~23 s per window).
+- ~6.7 min with Low Power Mode off: 69/69 windows in ~15 min (~13 s per window, owner report), ~640 MB of 24-bit stems.
+- Private Browsing blocks OPFS; the card explains it (#18). The stored-stem cleanup is #17.
+- The threads selector (#19) is live; iPhone 1/2/4-thread numbers are still to be measured (Stage V step 0).
+- Open owner decision: Stage IV as the one artifact on every tier (A, recommended) or a phone-only exception (B).
+  Stage IV vs production fp32 is not yet measured directly (chain: >= 61.9 dB vs fp16w, fp16w >= 49.2 dB vs fp32).
+- Tab Translator Pro is no longer attached; its lessons live in the handoff.
+
 ## Status (2026-11-24)
 Mobile Stage IV (stacked on PR #12, experimental): exact rewrites + two-level reductions + external data. WASM touched memory
 813 -> 475 MiB, Chromium peak PSS 1203/1158 -> 911/930 MiB, session-create heap 431 -> 147 MiB. WASM-vs-native parity fixed
@@ -66,10 +77,7 @@ Mobile Stage IV (stacked on PR #12, experimental): exact rewrites + two-level re
 initialise in Chromium with static shapes (inference needs shader-f16). **Physical iPhone (Safari 27.2) passed** the hosted test:
 session 2.9-3.9 s, 11.9-12.9 s per 7.8 s window (1 thread), WASM heap 616 MiB / touched 510 MiB, repeats bit-identical.
 On-device full-song separation built in the experimental card (Chromium: memory flat over a 45 s song, browser WAV24
-vs native >= 85.6 dB per stem). **First full song on the iPhone passed (2026-11-25, normal tab):** 43.2 s, 8 windows,
-3:05, heap 616 / touched 508-510 MiB flat, six 24-bit stems played from OPFS. That run took ~23 s per window with Low Power
-Mode on (owner confirmed; the window test did 12-13 s). Threads built (selector, verified in Chromium + WebKit).
-Next: iPhone speed baseline (Low Power Mode off), 2/4 threads on the iPhone, a 4-min song; then choose the default.
+vs native >= 85.6 dB per stem).
 
 ## Status (2026-11-23)
 Done: core + tests (67), server pipeline/API/CLI verified on real tracks (RTF ≈ 0.63, 4 vCPU), PWA builds and runs

@@ -44,10 +44,10 @@ Overall failure at pinned WASM numerical parity step. Graph folding, CPU parity,
 PSS sampled every 250 ms across Chromium processes; sampled peak can miss transients and is not native RSS or physical iOS memory. Pinned validation peak ~1.24 GiB, above original 1 GiB conservative mobile budget. Both WebGPU paths still fail.
 Validation used deterministic stereo 440/660 Hz tones plus seeded noise, native source model with graph optimization disabled, candidate browser model, one thread. First inference completed, then parity gate stopped at bass: drums 43.5883094372 dB, max abs 0.000111149624; bass 29.7740388068 dB, max abs 0.0000118680982. Other/vocals/guitar/piano not evaluated; repeated inference not completed. Gate fails when SNR <40 AND maxAbs >1e-5. Low reference energy may explain low SNR; not proven. Do not relax production parity blindly. Diagnostic artifact: https://github.com/quantumq1981/Guitar-Piano-Audio-Stem-Extract/actions/runs/45325896555/artifacts/14889931567
 
-## Cross-repository research (read-only)
-Tab Translator Pro: https://github.com/quantumq1981/Tab-Translator-Pro/tree/main. Consult SYNHARMONICS-V2.md if available, stem-model-core.js, stem-model.js, stem-worker.js, tests/bench/ort-pin.mjs, tests/bench/scnet-e2e.mjs, tests/bench/split-mem-e2e.mjs, docs/AUDIT-2026-11-18.md, docs/SCORE-AUDIO-LINK.md, docs/AUDIO-TO-TAB-PLAN.md. No changes authorized to that repository.
+## Lessons from the owner's Tab Translator Pro stem splitter (absorbed; that repository is no longer attached)
+These notes are all that is needed from it: do not look for the repository.
 - SCNet four-stem compact 2.8 s versus 11 s window is a precedent for re-export with fixed time-axis matrices; documented quality tradeoff ~2 dB SDR. Not a guitar/piano separator or direct HTDemucs substitute.
-- Plain vendored ORT 1.23.2 WASM single-thread, arena/pattern off, compact graph optimization disabled; separate WebGPU path. Safari issues microsoft/onnxruntime#33426 and #26827 are relevant leads, not proof of our failure cause.
+- Plain ORT 1.23.2 WASM build for old Safari: ORT ≥ 1.24 ships an Abseil whose hash seeds JavaScriptCore mis-optimises on ARM64 before Safari 17.5 (microsoft/onnxruntime#33426: random "Could not find OrtValue" at session creation). WebGPU in WebKit stalled in the asyncify build (#26827). This repo already runs the pinned 1.23.2 in CI (`ORT_PINNED=1`); Safari 27.2 on the owner's iPhone runs the app's ORT 1.31.1 fine.
 - Int16 transferable audio, incremental overlap-add and worker termination reduce retained audio/heap; Int16 is lossy and can clip, so preserve float fidelity or explicitly validate quantization.
 - SHA-keyed cache, verify cached/fresh bytes, evict corrupt entries, quota failures nonfatal; no heavy main-thread fallback. Close AudioContext, cancel stale requests, persist interrupted-run marker. Do not blindly transplant WebAssembly.Memory monkeypatch.
 - Browser PSS benchmarks and real musical fixtures are useful; Chromium is not physical Safari. Shared beat grid, score/audio DTW alignment, guitar transcription and MusicXML/MIDI/CSMPN integration are later opportunities.
@@ -226,6 +226,13 @@ The owner ran the song test in a normal Safari tab, after the private-window fai
 
 The Safari version was not in the screenshots.
 
+### Full-power 6.7-min song on the iPhone — 2026-11-25 **[M]**, from the owner's report
+With Low Power Mode off, at 1 thread, the owner separated a ~6.7-min song: 69 of 69 windows, six stems, no failure.
+- **Length:** 69 windows corresponds to 400–405 s of audio.
+- **Time:** "about 15 minutes" by the owner's account, so ≈ 13 s per window, ≈ 2.2× the song length. That matches the window test (11.9–12.9 s). The log was not captured, so the heap per window is not recorded.
+- **Memory:** the run lasted 69 windows (~15 min) without the tab being killed. The heap stays flat per window (as above), so song length does not raise the memory risk.
+- **Storage is now the cost:** six 24-bit stereo stems of 400–405 s are 635–644 MB in OPFS (computed).
+
 ### WASM threads (experimental card selector) **[M]**
 ORT's WASM build runs multi-threaded when the page is cross-origin isolated, which Pages already is (`public/sw.js`). The card now has a **WASM threads** selector: 1 / 2 / 4, remembered per device, default 1. `stage4Threads()` in core lowers the request to 1 on a non-isolated page and caps it at `navigator.hardwareConcurrency`. The log's session line names the thread count that was actually used.
 
@@ -241,10 +248,50 @@ Container: 4 vCPU. Per-window time, one 7.8 s window:
 - **Peak Chromium PSS:** 905 / 904 / 1002 MiB.
 - **Full song path:** a 4-thread song run completed in both engines, with six stems written.
 - **Bundled app:** Vite's ORT bundle started its pthread workers without changes, and the `em-pthread` guard held.
-- **Not measured yet:** the iPhone. It has performance and efficiency cores and reports 4 to the page, so expect less than the container's scaling.
+- **Not measured yet:** the iPhone. It has performance and efficiency cores and reports 4 to the page, so expect less than the container's scaling. The selector is live on Pages (PR #19); measuring it is Stage V step 0.
+
+## Stage V — the next stage: on-device separation in the main app (handoff for the next session)
+**Goal:** a phone gets free, private six-stem separation in the normal UI, with no server. Today the main app sends every phone to a server (`phone_form_factor` is a hard blocker in `packages/core/src/capability/routing.ts`). The free Pages build has no server (`API_BASE === null`), so on a phone the main app cannot separate at all; only the experimental card can. Everything Stage V needs has been proven in that card: memory flat over 69 windows, OPFS streaming, ≈ 13 s per window at 1 thread on the iPhone, identical parity at 1/2/4 threads.
+
+**Step 0 — iPhone thread test (owner, ~5 min, before code).** Low Power Mode off. In the experimental card, set WASM threads to 1, 2 and 4 and run "Stage IV: load + 1 window" once each. Record the "Window 1 PASS in …" seconds and the heap line. The fastest count whose heap stays at or below ≈ 620 MiB becomes the default (`MOBILE_STAGE4_CANDIDATE.session.numThreads`, `STAGE4_THREAD_OPTIONS`).
+
+**Step 1 — owner decision: model policy (ask before writing code).** The rule is one artifact on every tier.
+- **(A) Recommended: Stage IV becomes the single artifact everywhere.** The parity chain, with the contract at 40 dB per stem:
+  - Stage IV vs its source, the fp16-weight model (`htdemucs_6s-folded-fp16w`): ≥ 61.9 dB on the music fixture and ≥ 58.2 dB on the owner's songs **[M]**.
+  - That fp16-weight model vs today's production `htdemucs_6s-folded` (fp32): ≥ 49.2 dB **[M]** (ARCHITECTURE.md).
+  - Stage IV vs production directly is **not measured**. Run `compare-models.ts` first; expect ≈ 49 dB **[E]**, since the fp16 weights dominate.
+
+  The work:
+  - run that direct comparison; promotion needs it;
+  - a registry entry with two pinned files (graph + `.data`), and switch `PRIMARY_SEPARATION_MODEL`;
+  - the server runner (onnxruntime-node) loads the graph with its external data;
+  - re-measure server speed and memory (the earlier server RTF of ≈ 0.63 used the fp32 folded model);
+  - `compare-models.ts` parity, then switch all tiers together.
+- **(B) Phone-only exception.** Server and desktop keep `htdemucs_6s-folded`, and phones run Stage IV. This breaks the invariant, so CLAUDE.md and ARCHITECTURE.md must state the exception explicitly.
+
+**Step 2 — core (pure, headless-tested).**
+- **Routing:** replace the unconditional `phone_form_factor` blocker with evidence-based rules. A phone runs on the device when the page is cross-origin isolated, OPFS is writable (not Private Browsing; the page probes it, core takes it as a capability), the artifact is Stage IV, and there is no crash flag. Keep `crash_flag`, `battery_low` and the server option.
+- **Limits:** `LOCAL_LIMITS.maxDurationSecWasm = 30` predates streaming; replace it with a measured cap. ≈ 13 s per 5.85 s of song at 1 thread puts a 10-min song at ≈ 22 min; pick a cap with the owner. Add a storage check: stems need stems × (44 + frames × 2 channels × 3 bytes), so move that `need` calculation from `MobileBenchmark.tsx` into core.
+- **Memory projection:** `projectPeakMemory` assumes `inputCopies: 2, retainedOutputStems: 6`. With OPFS streaming, retained stems are ≈ 0. Model the Stage IV heap as measured (616 MiB reserved / 510 MiB touched on the iPhone), plus the decoded input (≈ 85 MB for 4 min).
+- **Stem choice:** on the device only `full` (six stems) exists; `guitar` (lead/rhythm) stays server-only. To save storage, let the user pick which stems to keep and write only those. All six are computed anyway; only writing is skipped.
+
+**Step 3 — web.**
+- **Main worker:** `apps/web/src/inference/worker.ts` loads one file with `graphOptimizationLevel: 'all'` and up to 4 threads. For Stage IV it must use the settings from `mobile-stage4.worker.ts`: graph optimisation disabled, external data, the capped `WebAssembly.Memory` and the `em-pthread` guard. The simplest route is to move that worker's session code into the main path.
+- **Model cache:** the card fetches the 124 MiB model every run and relies on the HTTP cache (Pages: `max-age=600` plus ETag). The main app needs a verified persistent cache for both files: extend `platform/model-cache.ts` (one file today) to the pair, with SHA-256 check and corrupt-entry eviction.
+- **Playback:** `audio/stem-player.ts` decodes stems into `AudioBuffer`s. Six decoded stems of a 6.7-min song are ≈ 850 MB of float32, which is too much for a phone. Play from the OPFS `File`s (media elements kept in sync, or decode on demand), and export or download straight from OPFS.
+- **Keep from the card:** the wake lock, the stop on a hidden page, the crash marker, the stored-stem scan and delete (`storedStem`), freeing old stems before the quota check, and the Private Browsing explanation.
+
+**Step 4 — verify.**
+- `npm test`, `npm run typecheck`, `npm run build:web`, plus the mobile-graph CI gate.
+- The real app in Playwright Chromium and WebKit. WebKit setup: `PLAYWRIGHT_BROWSERS_PATH=<scratch> node <global playwright>/cli.js install webkit && … install-deps webkit`. Use `launchPersistentContext` for a normal tab and `newContext()` for Private-Browsing behaviour.
+- Then the iPhone, in a normal tab with Low Power Mode off.
+
+**Later (unchanged):** further exact memory cuts (chunk the frequency-branch DConv along its 512-row batch; run the ISTFT tail per source; both remove 63 MiB tensors); other devices (iPads, older iOS → ORT 1.23.2, Android Chrome); WebGPU (static shapes, shader-f16, GPU-process memory on iOS).
+
+## Stage IV — remaining work (historical list; Stage V above supersedes items 1, 2 and 4)
 
 
-1. ~~Physical iPhone: session create, one window, repeated windows~~ **done 2026-11-24 (above).** Still to test: other iPhones/iPads (old iOS → ORT 1.23.2) and Android Chrome. Read `[stems …]`-style labels from the start: record ORT version, Safari version and touched heap. The WASM path should stay on the pinned 1.23.2 plain build, because of microsoft/onnxruntime#33426 (JSC on Safari < 17.5; see Tab Translator Pro `stem-model-core.js`).
+1. ~~Physical iPhone: session create, one window, repeated windows~~ **done 2026-11-24 (above).** Still to test: other iPhones/iPads (old iOS → ORT 1.23.2) and Android Chrome. Read `[stems …]`-style labels from the start: record ORT version, Safari version and touched heap. For Safari < 17.5 use the pinned ORT 1.23.2 plain build (microsoft/onnxruntime#33426; see the lessons section).
 2. App integration behind the experimental benchmark (Stage III item 3). The worker loads graph + `.data` with `externalData`, each file SHA-256-verified and cached, and drops its reference to the data buffer after `create()`. Use one thread, graph optimisation disabled, a verified cache, transferable buffers, cancellation, crash marker and worker termination. The registry needs two pinned hashes (graph + data).
 3. Further exact memory cuts. Chunk the frequency-branch DConv along its 512-row batch (every op there is per row; replace constant batch dims in Reshape targets with 0). Run the ISTFT tail per source (batch 12 → 2). Both remove 63 MiB tensors, the new peak.
 4. Full tracks: **built**, and the first physical-iPhone song passed (43.2 s, memory flat, above). Next: rerun with Low Power Mode off for the speed baseline, and a 4-min song (≈ 41 windows, ≈ 380 MB of stems). Threads are built (selector above, Chromium and WebKit verified); measure 2 and 4 on the iPhone, then pick the default. Original note: one session reused across windows (touched memory 479–510 MiB over 3 windows on the iPhone). Store stems without holding six float32 copies of the song, which is 508 MB for 4 min stereo: Int16 (254 MB, validate quantisation) or OPFS streaming (≈ 0). Recycle the worker if the heap creeps. Then try 2–4 threads for speed, since the device reported crossOriginIsolated true and 4 cores.
@@ -252,11 +299,16 @@ Container: 4 vCPU. Per-window time, one 7.8 s window:
 6. Promotion rule unchanged: one artifact on every tier, parity ≥ 40 dB per stem (now on the music fixture), `npm test`, `npm run typecheck`, `npm run build:web`, licences and musical quality before production.
 
 ## Files and reproduction
-scripts/fold_webgpu.py; scripts/mobile_graph.py; scripts/mobile_memory.py (Stage IV passes + simulator); scripts/test_mobile_memory.py; scripts/mobile_fixture.py (music fixture); scripts/mobile-webgpu-check.mjs (`ORT_MODEL`, `ORT_MODEL_DATA`, `ORT_FIXTURE`, `ORT_RUNS`; reports `wasmHeapMiB` per phase; validation fails unless every requested run completed); .github/workflows/mobile-graph.yml; apps/web/src/inference/mobile-bench.worker.ts; apps/web/src/components/MobileBenchmark.tsx; packages/core/src/models/registry.ts; packages/core/src/capability/routing.ts; packages/core/src/memory/budget.ts; packages/core/src/separation/engine.ts.
+scripts/fold_webgpu.py; scripts/mobile_graph.py; scripts/mobile_memory.py (Stage IV passes + simulator); scripts/test_mobile_memory.py; scripts/mobile_fixture.py (music fixture); scripts/mobile-webgpu-check.mjs (`ORT_MODEL`, `ORT_MODEL_DATA`, `ORT_FIXTURE`, `ORT_RUNS`, `ORT_THREADS`; reports `wasmHeapMiB` per phase; validation fails unless every requested run completed); .github/workflows/mobile-graph.yml; apps/web/src/inference/mobile-bench.worker.ts; apps/web/src/components/MobileBenchmark.tsx (experimental card: song path, stored-stem scan, Private Browsing probe, threads); apps/web/src/inference/mobile-stage4.worker.ts + stage4-protocol.ts; packages/core/src/models/mobile-experimental.ts (Stage IV pins, `stage4Threads`, memory cap); packages/core/src/codec/stem-wav-sink.ts (`wavStemSink`, `storedStem`); packages/core/src/models/registry.ts; packages/core/src/capability/routing.ts; packages/core/src/memory/budget.ts; packages/core/src/separation/engine.ts.
 CI downloads the source, checks SHA-256, runs `python scripts/mobile_graph.py source.onnx candidate.onnx graph-report.json`, then the unit tests and `python scripts/mobile_memory.py candidate.onnx candidate-memory.onnx memory-report.json --external-data --accurate-reductions`. It uploads `experimental-mobile-graph` (both candidates and both reports), and installs Playwright Chromium and ORT 1.23.2 in `ort-compat`. The workflow generates `reference-input.bin`, `reference-source.bin` and `reference-candidate.bin` and runs the WASM and WebGPU compatibility matrix. The gate is the Stage IV candidate with `ORT_FIXTURE=music ORT_VALIDATE=1` for `ORT_PINNED=0` and `1`, compared against native source and native same-graph references. The PR #12 candidate on the tone fixture runs as a non-gating diagnostic. `browser-compatibility-results` is uploaded even when validation fails. Keep the same fixture, model hashes and runtime versions for comparisons. Artifacts expire after seven days.
 
 ## Deferred product direction
 Potential Bandleader HQ integration with Tab Translator Pro, Chord Sheet Maker Pro, stage sheets, repertoire and gig prospecting; future Linux workstation with GPU for hybrid inference and commercial subscription platform. These are proposals, not implemented features. No paid infrastructure required for current research. Public GitHub inbox processing exposes uploaded audio; do not use for private recordings.
 
 ## Fresh-session prompt
-Read CLAUDE.md, docs/ARCHITECTURE.md and this file on the newest mobile branch (Stage IV: `claude/sweet-pascal-h1pafr`, stacked on PR #12). Inspect latest PR and Actions logs before modifying anything. Continue at Stage IV remaining work, item 1. Preserve production behavior and leave Tab Translator Pro untouched. Do not repeat completed experiments or claim mobile readiness from CI. Update this handoff with measured results as work progresses.
+Read CLAUDE.md, docs/ARCHITECTURE.md and this file (main branch; all Stage IV work through PR #19 is merged). Check the latest PRs and Actions runs before changing anything. Start Stage V:
+1. Ask the owner for the step 0 iPhone thread results if they are not recorded here.
+2. Ask for the step 1 model-policy decision (A or B) before writing code.
+3. Build steps 2–4 as one reviewed PR, or a few small ones.
+
+Keep main-app routing for non-phone devices and the server path working. Do not repeat completed experiments. Tag numbers [M]/[V]/[E], and do not claim device results from Chromium or WebKit runs. Record measured results here as work progresses. Tab Translator Pro is not attached; its lessons are in the section above.

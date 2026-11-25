@@ -222,7 +222,7 @@ The owner ran the song test in a normal Safari tab, after the private-window fai
 | WASM heap | 616 MiB reserved, 508–510 MiB touched, flat over windows 3–8. Same as the window test. |
 | Output | 1,905,367 frames, 6 × 11 MiB 24-bit WAV (69 MB), no clipping; played from OPFS in Safari |
 
-**Speed:** about 23 s per window is ≈ 1.8× the window test's 11.9–12.9 s. The time is constant from window 1, which does not fit thermal throttling, since that would build up over the run. The battery icon in the screenshots is yellow, which on iOS means Low Power Mode, and Low Power Mode lowers CPU speed. This is unconfirmed **[E]**; a rerun with Low Power Mode off will settle it.
+**Speed:** about 23 s per window is ≈ 1.8× the window test's 11.9–12.9 s. The time is constant from window 1, which does not fit thermal throttling, since that would build up over the run. **Low Power Mode was on (confirmed by the owner)**, and it lowers CPU speed, so it is the likely cause. Treat this run as the Low Power Mode figure: ≈ 4.3× the song length, ≈ 17 min for 4 min of audio **[E]**. A rerun with Low Power Mode off gives the normal baseline.
 
 The Safari version was not in the screenshots.
 

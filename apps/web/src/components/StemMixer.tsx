@@ -1,20 +1,12 @@
 import { useEffect, useState } from 'react';
 import type { StemName } from '@stemsplit/core';
+import { STEM_LABELS } from '@stemsplit/core';
 import type { StemPlayer } from '../audio/stem-player.ts';
 import type { StemChannelState } from '../audio/mix-logic.ts';
 import { sliderToGain } from '../audio/mix-logic.ts';
 import { downloadBlob, shareFiles, stemFilename, stemToWavBlob } from '../audio/export.ts';
+import { Icon, STEM_COLORS } from './ui.tsx';
 
-const LABELS: Readonly<Record<StemName, string>> = {
-  vocals: 'Vocals',
-  drums: 'Drums',
-  bass: 'Bass',
-  other: 'Other',
-  guitar: 'Guitar',
-  piano: 'Piano',
-  guitar_lead: 'Lead guitar',
-  guitar_rhythm: 'Rhythm guitar',
-};
 
 interface Channel extends StemChannelState {
   readonly slider: number;
@@ -48,51 +40,54 @@ export function StemMixer({ player, stems, baseName }: { player: StemPlayer; ste
   };
 
   return (
-    <section className="mixer">
-      <div className="transport">
-        <button type="button" onClick={() => (playing ? player.pause() : void player.play())}>
-          {playing ? 'Pause' : 'Play'}
+    <section className="mixer stack">
+      <div className="transport card">
+        <button type="button" className="transport__play" aria-label={playing ? 'Pause' : 'Play'} onClick={() => (playing ? player.pause() : void player.play())}>
+          <Icon name={playing ? 'pause' : 'play'} size={22} />
         </button>
-        <input
-          type="range"
-          min={0}
-          max={player.duration || 1}
-          step={0.01}
-          value={position}
-          onChange={(e) => player.seek(Number(e.target.value))}
-          aria-label="Position"
-        />
-        <span className="time">{fmt(position)} / {fmt(player.duration)}</span>
+        <input type="range" min={0} max={player.duration || 1} step={0.01} value={position} onChange={(e) => player.seek(Number(e.target.value))} aria-label="Position" />
+        <span className="time">
+          {fmt(position)} / {fmt(player.duration)}
+        </span>
       </div>
-      {stems.map((stem) => {
-        const ch = channels[stem]!;
-        return (
-          <div className="channel" key={stem}>
-            <span className="channel__name">{LABELS[stem]}</span>
-            <button type="button" aria-pressed={ch.soloed} className={ch.soloed ? 'on' : ''} onClick={() => patch(stem, { soloed: !ch.soloed })}>
-              S
-            </button>
-            <button type="button" aria-pressed={ch.muted} className={ch.muted ? 'on' : ''} onClick={() => patch(stem, { muted: !ch.muted })}>
-              M
-            </button>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.01}
-              value={ch.slider}
-              aria-label={`${LABELS[stem]} level`}
-              onChange={(e) => {
-                const slider = Number(e.target.value);
-                patch(stem, { slider, gain: sliderToGain(slider) });
-              }}
-            />
-            <button type="button" onClick={() => void exportStem(stem, true)}>
-              Export
-            </button>
-          </div>
-        );
-      })}
+      <ul className="stem-list">
+        {stems.map((stem) => {
+          const ch = channels[stem]!;
+          const color = STEM_COLORS[stem];
+          return (
+            <li className="stem-row channel" key={stem}>
+              <div className="stem-row__main">
+                <span className="stem-row__name">
+                  <span className="dot" style={{ background: color }} aria-hidden="true" />
+                  {STEM_LABELS[stem]}
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={ch.slider}
+                  style={{ accentColor: color }}
+                  aria-label={`${STEM_LABELS[stem]} level`}
+                  onChange={(e) => {
+                    const slider = Number(e.target.value);
+                    patch(stem, { slider, gain: sliderToGain(slider) });
+                  }}
+                />
+              </div>
+              <button type="button" className={ch.soloed ? 'toggle toggle--on' : 'toggle'} aria-pressed={ch.soloed} aria-label={`Solo ${STEM_LABELS[stem]}`} onClick={() => patch(stem, { soloed: !ch.soloed })}>
+                Solo
+              </button>
+              <button type="button" className={ch.muted ? 'toggle toggle--on' : 'toggle'} aria-pressed={ch.muted} aria-label={`Mute ${STEM_LABELS[stem]}`} onClick={() => patch(stem, { muted: !ch.muted })}>
+                Mute
+              </button>
+              <button type="button" className="icon-button icon-button--outline" aria-label={`Save ${STEM_LABELS[stem]}`} onClick={() => void exportStem(stem, true)}>
+                <Icon name="save" size={18} />
+              </button>
+            </li>
+          );
+        })}
+      </ul>
     </section>
   );
 }

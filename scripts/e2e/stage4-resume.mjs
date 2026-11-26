@@ -76,7 +76,7 @@ async function waitForLog(pattern, timeout = 1_200_000) {
 
 /** Opens the app; `afterKill` first acknowledges the interruption marker a killed tab leaves (it disables the card). */
 async function open({ afterKill = false } = {}) {
-  await page.goto(url);
+  await page.goto(`${url.replace(/\/$/, '')}/#diagnostics`); // the experimental card lives on the diagnostics screen
   if (!(await page.evaluate(() => crossOriginIsolated))) throw new Error('page is not cross-origin isolated');
   if (afterKill) {
     const ack = card.getByRole('button', { name: 'Acknowledge interruption' });

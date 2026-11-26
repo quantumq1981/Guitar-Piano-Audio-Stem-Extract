@@ -36,7 +36,7 @@
 - Production builds without `VITE_API_BASE` have no server (`API_BASE === null`); server-routed jobs are disabled with an explanation.
 - Pages also serves experimental `models/mobile.onnx` and the Stage IV `models/candidate-memory.onnx` + `.data` (rebuilt in pages.yml,
   deploy fails unless SHA-256 matches `MOBILE_STAGE4_CANDIDATE` in `packages/core/src/models/mobile-experimental.ts`). Device test:
-  experimental card → "Stage IV: load + N windows" (`apps/web/src/inference/mobile-stage4.worker.ts`). The same card has
+  experimental card (home → "Device check & diagnostics", or `#diagnostics`) → "Stage IV: load + N windows" (`apps/web/src/inference/mobile-stage4.worker.ts`). The same card has
   "Separate a song on this device": core `separate()` + Stage IV session, stems streamed to OPFS as 24-bit WAV via `wavStemSink`
   (`packages/core/src/codec/stem-wav-sink.ts`); main-app routing is unchanged (phones still go to the server). The page scans
   OPFS on load and after every run (`storedStem` = complete / partial / invalid from the header + size), so a stopped run's
@@ -78,12 +78,24 @@
   fires first); E2E kills use CDP `Page.crash`.
 - The MP3s in the repo root are the owner's test material; never commit derived stems (`out/` is gitignored).
 
+## Status (2026-11-26, latest) — app redesign: one screen per step
+- Owner approved the design canvas (https://claude.ai/artifact/NLjadeumgETCo9wJf1rcDR): home → choose stems → working → paused / stems.
+- Pure flow logic in `packages/core/src/ui/flow.ts` (`screenFor`, `scopeOptions`, `planFor`, `partProgress`, plain-language
+  `problemCopy`, `pauseMessage`; tests `packages/core/test/flow.test.ts`). Components only render it: `Home`, `ChooseStems`,
+  `Working`, `PausedRun`, `StoredStems`, `StemMixer`, shared `components/ui.tsx`. `RoutingBanner`/`StoredRun` are gone.
+- Never show a control this build cannot run: "Guitar focus" and "Always use our server" appear only with `VITE_API_BASE`;
+  "Refine piano" is hidden (Banquet not built; the server would return the stem unrefined). Routing reasons and memory
+  projection moved to the diagnostics screen (`#diagnostics`) with the GPU check and the experimental card.
+- System fonts only: COEP `require-corp` blocks web-font CDNs, and the PWA must work offline.
+- E2E selectors changed: `device-disk-run.mjs` (home rows, `.working[data-phase=local] progress`), `browser-smoke.mjs`
+  (`.file-pick input`, `.stem-row__name`), `stage4-resume.mjs` (opens `#diagnostics`).
+
 ## Status (2026-11-26) — Stage V step 2: phones and tablets separate on device in the main app
 - Routing by evidence (`capability/routing.ts`): non-desktop → **disk path** when the artifact has a measured `browserHeapBytes`,
   `caps.opfsWritable`, isolation, battery, ≤ 600 s, `projectDiskRunPeak` ≤ ceiling, storage for model + projected stems + song.
   The owner's iPhone UA is desktop-class → classified **tablet**; rules key on "not desktop". Crash flag guards desktop only.
 - Disk path: `inference/disk-run.ts` (shared with the card) + `device-run.worker.ts` + `disk-run-client.ts` (hidden/battery → pause,
-  wake lock) + `platform/disk-store.ts` + `components/StoredRun.tsx` (play/save from OPFS, Resume, Delete). Quick scope writes 4 stems.
+  wake lock) + `platform/disk-store.ts` + `components/StoredStems.tsx` / `PausedRun.tsx` (play/save from OPFS, Resume, Delete). Quick ("4 stems") writes 4.
 - Merged as PR #24 and live on Pages (2026-11-26). Follow-up (Codex): `runOnDisk` checks battery and visibility once at start,
   since a resume skips routing and the page can be hidden during decode (`apps/web/test/disk-run-client.test.ts`).
 - Next: physical-iPhone test of the main app, step 0 thread numbers, a synced mixer from disk, an immutable model URL.

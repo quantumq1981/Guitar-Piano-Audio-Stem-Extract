@@ -6,6 +6,7 @@ coverage/
 
 # Large binaries: ONNX weights are fetched by `npm run models:fetch`, never committed.
 models/*.onnx
+models/*.onnx.data
 models/*.part
 
 # Separation outputs and server job storage

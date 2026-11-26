@@ -49,15 +49,15 @@ await page.route('https://huggingface.co/**', (route) => route.abort());
 await page.goto(`${url}/?debug=1`);
 const isolated = await page.evaluate(() => crossOriginIsolated);
 console.log(`crossOriginIsolated=${isolated}`);
-await page.setInputFiles('input[type=file]', clip);
-await page.waitForSelector('.banner');
-console.log('banner:', (await page.textContent('.banner')).replace(/\s+/g, ' ').trim());
+await page.setInputFiles('.file-pick input[type=file]', clip);
+await page.waitForSelector('.facts');
+console.log('plan:', (await page.textContent('.facts')).replace(/\s+/g, ' ').trim());
 
 const t0 = Date.now();
-await page.click('button.primary');
+await page.getByRole('button', { name: /^Separate into/ }).click();
 await page.waitForSelector('.mixer', { timeout: 600_000 });
 console.log(`device path finished in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
-const stems = await page.$$eval('.channel__name', (els) => els.map((e) => e.textContent));
+const stems = await page.$$eval('.stem-row__name', (els) => els.map((e) => e.textContent));
 console.log('stems:', stems.join(', '));
 const vocalsL = Float32Array.from(await page.evaluate(() => Array.from(globalThis.__stemsplit.player.channelData('vocals')[0])));
 const ref = decodeWav24or16(readFileSync(serverVocals));
@@ -65,14 +65,14 @@ console.log(`parity browser-WASM vs server-CPU (vocals L): SNR ${snr(ref, vocals
 
 if (withServer) {
   await page.reload();
-  await page.setInputFiles('input[type=file]', clip);
-  await page.check('text=Always use the server');
+  await page.setInputFiles('.file-pick input[type=file]', clip);
+  await page.check('text=Always use our server');
   await page.click('text=Guitar focus');
-  await page.waitForSelector('.banner--server');
-  await page.click('button.primary');
+  await page.getByText('Our server').waitFor();
+  await page.getByRole('button', { name: /^Separate/ }).click();
   await page.waitForSelector('.mixer', { timeout: 600_000 });
-  const s2 = await page.$$eval('.channel__name', (els) => els.map((e) => e.textContent));
-  const warnings = await page.$$eval('.warning', (els) => els.map((e) => e.textContent));
+  const s2 = await page.$$eval('.stem-row__name', (els) => els.map((e) => e.textContent));
+  const warnings = await page.$$eval('.notice--warn', (els) => els.map((e) => e.textContent));
   console.log('server path stems:', s2.join(', '));
   console.log('server warnings:', warnings.length);
 }

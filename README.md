@@ -32,11 +32,13 @@ VITE_API_BASE=http://localhost:8787 npm run dev:web
 
 ## Scopes
 
-| Scope | Stems | Runs on |
+| Scope (shown in the app as) | Stems | Runs on |
 |---|---|---|
-| Quick | vocals, drums, bass, other | device or server |
-| Full | + guitar, piano | device or server |
-| Guitar focus | + lead / rhythm guitar split | server only |
+| Quick ("4 stems") | vocals, drums, bass, other | device or server |
+| Full ("6 stems") | + guitar, piano | device or server |
+| Guitar focus | + lead / rhythm guitar split | server only; the app shows it only when a server is configured |
+
+The app shows only what the build can run: without `VITE_API_BASE` there is no Guitar focus and no server switch, and piano refinement is not offered at all. Device checks, routing details and the experimental model card are under **Device check & diagnostics** (`#diagnostics`).
 
 The lead/rhythm split is currently a labelled DSP heuristic (`spatial-similarity-v0`), because no openly licensed ML model exists yet. Piano refinement (Banquet) is stubbed for licensing reasons. See the architecture doc §0.
 

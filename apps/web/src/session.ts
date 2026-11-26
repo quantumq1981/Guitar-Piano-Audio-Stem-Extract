@@ -4,7 +4,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CapabilitySnapshot, CreateJobRequest, JobRecord, JobWarning, RouteDecision, SeparationScope, StemName, UserPreference } from '@stemsplit/core';
-import { PRIMARY_SEPARATION_MODEL, SCOPE_OUTPUTS, decideRoute, deviceOutputs, deviceThreads, estimateDeviceSeconds, requireIO } from '@stemsplit/core';
+import { BUSY_FLOW_PHASES, PRIMARY_SEPARATION_MODEL, SCOPE_OUTPUTS, decideRoute, deviceOutputs, deviceThreads, estimateDeviceSeconds, partsFor, planFor, requireIO, usableScope } from '@stemsplit/core';
 import { ServerClient } from './api/server-client.ts';
 import { decodeForModel, probeDuration } from './audio/decode.ts';
 import { StemPlayer } from './audio/stem-player.ts';
@@ -45,7 +45,7 @@ export type Phase =
   | { readonly kind: 'error'; readonly message: string; readonly canRetryOnServer: boolean };
 
 /** Phases during which a job is running (inputs and other jobs are locked). */
-export const BUSY_PHASES: ReadonlySet<Phase['kind']> = new Set(['decoding', 'model-download', 'local', 'waking', 'uploading', 'server']);
+export const BUSY_PHASES: ReadonlySet<Phase['kind']> = BUSY_FLOW_PHASES;
 
 const randomKey = () => crypto.getRandomValues(new Uint8Array(16)).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '');
 
@@ -67,29 +67,38 @@ export function useSeparation() {
   const [caps, setCaps] = useState<CapabilitySnapshot | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [duration, setDuration] = useState<number | null>(null);
-  const [scope, setScope] = useState<SeparationScope>('full');
+  const [chosenScope, setScope] = useState<SeparationScope>('full');
   const [refinePiano, setRefinePiano] = useState(false);
   const [preference, setPreference] = useState<UserPreference>('auto');
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
   const playerRef = useRef<StemPlayer | null>(null);
   const client = useRef(API_BASE ? new ServerClient(API_BASE) : null).current;
+  // A server-only choice (kept from a build that had a server) falls back to what this build can run.
+  const scope = usableScope(chosenScope, client !== null);
   const [stored, setStored] = useState<StoredDeviceRun | null>(null);
   const diskRun = useRef<DiskRunHandle | null>(null);
   const [diskActive, setDiskActive] = useState(false);
+  /** The stored-run scan is in flight (a run just ended, or the page just loaded). */
+  const [scanning, setScanning] = useState(true);
 
   // What the last on-device run left (finished stems, or a stopped run to resume). A stopping worker releases its
   // file locks shortly after terminate(), so a 'busy' scan is retried.
   const refreshStored = useCallback(async () => {
-    for (let attempt = 0; attempt < 10; attempt++) {
-      const result = await scanDeviceRun().catch(() => null);
-      if (result?.state !== 'busy') {
-        setStored(result);
-        return result;
+    setScanning(true);
+    try {
+      for (let attempt = 0; attempt < 10; attempt++) {
+        const result = await scanDeviceRun().catch(() => null);
+        if (result?.state !== 'busy') {
+          setStored(result);
+          return result;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500));
       }
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      setStored(null);
+      return null;
+    } finally {
+      setScanning(false);
     }
-    setStored(null);
-    return null;
   }, []);
 
   useEffect(() => {
@@ -126,6 +135,17 @@ export function useSeparation() {
   const io = requireIO(PRIMARY_SEPARATION_MODEL);
   const estimateSec =
     decision?.target === 'device' && caps && duration !== null ? estimateDeviceSeconds(duration, decision.threads, caps.formFactor, io.segmentFrames, io.sampleRate) : null;
+  const plan = planFor({
+    decision,
+    scope,
+    serverConfigured: client !== null,
+    estimateSec,
+    durationSec: duration,
+    formFactor: caps?.formFactor ?? null,
+    modelCached: caps?.modelCached ?? false,
+    model: PRIMARY_SEPARATION_MODEL,
+  });
+  const totalParts = partsFor(duration, PRIMARY_SEPARATION_MODEL);
 
   const freshPlayer = async (): Promise<StemPlayer> => {
     await playerRef.current?.close();
@@ -185,6 +205,7 @@ export function useSeparation() {
       else setPhase({ kind: 'error', message: e instanceof Error ? e.message : String(e), canRetryOnServer: client !== null });
     } finally {
       diskRun.current = null;
+      setScanning(true); // the outcome screen waits for the scan below
       setDiskActive(false);
       await refreshStored();
       void gatherCapabilities().then(setCaps); // storage changed
@@ -307,7 +328,10 @@ export function useSeparation() {
     player: playerRef,
     serverConfigured: client !== null,
     estimateSec,
+    plan,
+    totalParts,
     stored,
+    scanning,
     resumeStored,
     pauseDisk,
     diskActive,

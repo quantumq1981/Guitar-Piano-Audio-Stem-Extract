@@ -1,160 +1,187 @@
-import { useState } from 'react';
-import { MobileBenchmark } from './components/MobileBenchmark.tsx';
-import type { SeparationScope } from '@stemsplit/core';
-import { SERVER_LIMITS } from '@stemsplit/core';
+import { useEffect, useState } from 'react';
+import type { Nav } from '@stemsplit/core';
+import { REASON_COPY, formatBytes, scopeOption, scopeOptions, screenFor } from '@stemsplit/core';
+import { ChooseStems } from './components/ChooseStems.tsx';
 import { GpuDiagnostics } from './components/GpuDiagnostics.tsx';
-import { RoutingBanner } from './components/RoutingBanner.tsx';
+import { Home } from './components/Home.tsx';
+import { MobileBenchmark } from './components/MobileBenchmark.tsx';
+import { PausedRun } from './components/PausedRun.tsx';
 import { StemMixer } from './components/StemMixer.tsx';
-import { StoredRun } from './components/StoredRun.tsx';
+import { StoredStems } from './components/StoredStems.tsx';
+import { Notice, TopBar } from './components/ui.tsx';
+import { Working } from './components/Working.tsx';
 import { BUSY_PHASES, useSeparation } from './session.ts';
 
-const SCOPES: ReadonlyArray<{ id: SeparationScope; label: string; detail: string }> = [
-  { id: 'quick', label: 'Quick', detail: 'Vocals, drums, bass, other' },
-  { id: 'full', label: 'Full', detail: '+ guitar and piano' },
-  { id: 'guitar', label: 'Guitar focus', detail: 'Lead / rhythm guitar split (server)' },
-];
+const DIAGNOSTICS_HASH = '#diagnostics';
+const initialNav = (): Nav => (location.hash === DIAGNOSTICS_HASH ? 'diagnostics' : 'auto');
 
+/**
+ * One screen at a time (core `screenFor`): home → choose → working → paused / stems. Device checks and the
+ * experimental model card live on their own screen (`#diagnostics`), out of the everyday flow.
+ */
 export function App() {
   const s = useSeparation();
+  const [nav, setNavState] = useState<Nav>(initialNav);
   const [benchmarkBusy, setBenchmarkBusy] = useState(false);
   const busy = benchmarkBusy || BUSY_PHASES.has(s.phase.kind);
 
+  const setNav = (next: Nav) => {
+    setNavState(next);
+    const hash = next === 'diagnostics' ? DIAGNOSTICS_HASH : '';
+    if (location.hash !== hash) history.replaceState(null, '', `${location.pathname}${location.search}${hash}`);
+  };
+  useEffect(() => {
+    const onHash = () => setNavState(initialNav());
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+  // A finished, paused or failed job brings the user to its outcome.
+  useEffect(() => {
+    if (BUSY_PHASES.has(s.phase.kind)) setNavState((n) => (n === 'diagnostics' ? n : 'auto'));
+  }, [s.phase.kind]);
+
+  const screen = screenFor({ phase: s.phase.kind, hasFile: s.file !== null, stored: s.stored?.state === 'busy' ? null : (s.stored?.state ?? null), nav });
+  const deviceWord = s.caps === null || s.caps.formFactor === 'desktop' ? 'computer' : s.caps.formFactor;
+  const goHome = () => {
+    void s.chooseFile(null);
+    setNav('home');
+  };
+  const p = s.phase;
+  const songName = s.file?.name ?? (s.stored && 'sourceName' in s.stored ? s.stored.sourceName : 'Your song');
+  const replaces = s.stored && 'sourceName' in s.stored ? s.stored.sourceName : null;
+
   return (
     <main className="app">
-      <header>
-        <h1>Stem Splitter</h1>
-        <p className="muted">Guitar and piano isolation. Local processing depends on browser capabilities.</p>
-      </header>
-
-      <section className="card">
-        <label className="file">
-          <input type="file" accept="audio/*,.mp3,.wav,.flac,.m4a,.aac,.ogg" disabled={busy} onChange={(e) => void s.chooseFile(e.target.files?.[0] ?? null)} />
-          <span>{s.file ? s.file.name : 'Choose an audio file'}</span>
-        </label>
-        {s.duration !== null && (
-          <p className="muted">
-            {Math.round(s.duration)} s · {(s.file!.size / 1e6).toFixed(1)} MB
-            {s.duration > SERVER_LIMITS.maxDurationSec ? ' · over the 6-minute limit' : ''}
-          </p>
-        )}
-
-        <fieldset className="scopes" disabled={busy}>
-          <legend>Separation</legend>
-          {SCOPES.map((o) => (
-            <label key={o.id} className={s.scope === o.id ? 'scope scope--on' : 'scope'}>
-              <input type="radio" name="scope" value={o.id} checked={s.scope === o.id} disabled={o.id === 'guitar' && !s.serverConfigured} onChange={() => s.setScope(o.id)} />
-              <span>{o.label}</span>
-              <small>{o.detail}</small>
-            </label>
-          ))}
-          <label className="check">
-            <input type="checkbox" checked={s.refinePiano} disabled={!s.serverConfigured} onChange={(e) => s.setRefinePiano(e.target.checked)} />
-            Refine piano (server)
-          </label>
-          <label className="check">
-            <input type="checkbox" checked={s.preference === 'force-server'} disabled={!s.serverConfigured} onChange={(e) => s.setPreference(e.target.checked ? 'force-server' : 'auto')} />
-            Always use the server
-          </label>
-        </fieldset>
-
-        {s.decision && (
-          <RoutingBanner
-            decision={s.decision}
-            serverConfigured={s.serverConfigured}
-            estimateSec={s.estimateSec}
-            replacesStored={s.stored !== null}
-            onClearCrash={s.clearCrash}
-          />
-        )}
-
-        <button
-          type="button"
-          className="primary"
-          disabled={!s.decision || busy || (s.decision.target === 'server' && !s.serverConfigured)}
-          onClick={() => void s.start()}
-        >
-          Separate
-        </button>
-      </section>
-
-      {renderStatus()}
-      {s.diskActive && (
-        <button type="button" onClick={s.pauseDisk}>
-          Pause (resume later)
-        </button>
+      {screen === 'home' && (
+        <Home
+          stored={s.stored?.state === 'busy' ? null : s.stored}
+          onFile={(f) => {
+            setNav('auto');
+            void s.chooseFile(f);
+          }}
+          onOpenStored={() => setNav('stored')}
+          onResume={() => {
+            setNav('auto');
+            void s.resumeStored();
+          }}
+          onDelete={() => void s.deleteStored()}
+          onDiagnostics={() => setNav('diagnostics')}
+          error={p.kind === 'error' && !s.file ? p.message : null}
+          deviceWord={deviceWord}
+          localOnly={!s.serverConfigured}
+        />
       )}
-      {s.stored && <StoredRun stored={s.stored} busy={busy} onResume={() => void s.resumeStored()} onDelete={() => void s.deleteStored()} />}
-      <GpuDiagnostics disabled={busy} />
-      <MobileBenchmark disabled={busy} onBusy={setBenchmarkBusy} />
 
-      {s.phase.kind === 'ready' && s.player.current && (
-        <>
-          {s.phase.warnings.map((w) => (
-            <p key={w.code} className="warning">
+      {screen === 'choose' && s.file && (
+        <ChooseStems
+          fileName={s.file.name}
+          fileBytes={s.file.size}
+          durationSec={s.duration}
+          options={scopeOptions(s.serverConfigured)}
+          scope={s.scope}
+          onScope={s.setScope}
+          plan={s.plan}
+          checking={s.decision === null}
+          diskPath={s.decision?.target === 'device' && s.decision.storage === 'disk'}
+          serverConfigured={s.serverConfigured}
+          forceServer={s.preference === 'force-server'}
+          onForceServer={(on) => s.setPreference(on ? 'force-server' : 'auto')}
+          replaces={s.decision?.target === 'device' && s.decision.storage === 'disk' ? replaces : null}
+          error={p.kind === 'error' ? { message: p.message, canRetryOnServer: p.canRetryOnServer } : null}
+          queuedOffline={p.kind === 'queued-offline'}
+          onStart={(forceServer) => {
+            setNav('auto');
+            void s.start(forceServer);
+          }}
+          onBack={goHome}
+          onClearCrash={s.clearCrash}
+        />
+      )}
+
+      {screen === 'working' && (
+        <Working
+          phase={p.kind}
+          fraction={p.kind === 'model-download' || p.kind === 'local' || p.kind === 'uploading' ? p.fraction : p.kind === 'server' ? (p.job.progress?.fraction ?? 0) : null}
+          etaSec={p.kind === 'local' ? p.etaSec : p.kind === 'server' ? (p.job.etaSec ?? null) : null}
+          totalParts={s.totalParts ?? (s.stored?.state === 'stopped' ? s.stored.total : null)}
+          songName={songName}
+          scopeTitle={scopeOption(s.scope).title}
+          diskActive={s.diskActive}
+          onPause={s.pauseDisk}
+          queuePosition={p.kind === 'server' ? (p.job.queuePosition ?? null) : null}
+        />
+      )}
+
+      {screen === 'paused' && (
+        <PausedRun
+          stored={s.stored?.state === 'busy' ? null : s.stored}
+          checking={s.scanning}
+          reason={p.kind === 'paused' ? p.reason : null}
+          busy={busy}
+          onResume={() => {
+            setNav('auto');
+            void s.resumeStored();
+          }}
+          onDelete={() => {
+            void s.deleteStored();
+            goHome();
+          }}
+          // Paused before anything was stored (hidden during decode): back to the same song's choice.
+          onBack={() => (s.file && s.stored?.state !== 'stopped' ? void s.chooseFile(s.file) : goHome())}
+        />
+      )}
+
+      {screen === 'stems' && (
+        <StoredStems
+          stored={s.stored?.state === 'busy' ? null : s.stored}
+          checking={s.scanning}
+          clipped={p.kind === 'disk-done' ? p.clipped : []}
+          busy={busy}
+          onDelete={() => {
+            void s.deleteStored();
+            goHome();
+          }}
+          onBack={goHome}
+        />
+      )}
+
+      {screen === 'player' && p.kind === 'ready' && s.player.current && (
+        <div className="screen">
+          <TopBar onBack={goHome} title={s.file?.name ?? 'Your stems'} subtitle={`${p.stems.length} stems · ${p.source === 'server' ? 'from our server' : 'made on this device'}`} />
+          <h1 className="visually-hidden">Your stems</h1>
+          {p.warnings.map((w) => (
+            <Notice key={w.code} tone="warn">
               {w.message}
-            </p>
+            </Notice>
           ))}
-          <StemMixer player={s.player.current} stems={s.phase.stems} baseName={s.file?.name.replace(/\.[^.]+$/, '') ?? 'stems'} />
-        </>
+          <StemMixer player={s.player.current} stems={p.stems} baseName={s.file?.name.replace(/\.[^.]+$/, '') ?? 'stems'} />
+        </div>
+      )}
+
+      {screen === 'diagnostics' && (
+        <div className="screen diagnostics">
+          <TopBar onBack={() => setNav('auto')} title="Device check & diagnostics" subtitle="Tools for testing this device" />
+          {s.decision && (
+            <section className="card">
+              <h2>Where the chosen song would run</h2>
+              <p>{s.decision.target === 'device' ? `On this device (${s.decision.ep === 'webgpu' ? 'WebGPU' : 'WebAssembly'}, ${s.decision.storage === 'disk' ? 'stems saved to storage' : 'stems in memory'})` : 'On the server'}</p>
+              <ul>
+                {s.decision.reasons.map((r) => (
+                  <li key={r}>{REASON_COPY[r]}</li>
+                ))}
+              </ul>
+              {s.decision.memory && (
+                <p className="muted">
+                  Projected peak memory {formatBytes(s.decision.memory.projectedPeakBytes)}
+                  {s.decision.memory.hasEstimates ? ' (includes estimates)' : ''}.
+                </p>
+              )}
+            </section>
+          )}
+          <GpuDiagnostics disabled={busy} />
+          <MobileBenchmark disabled={busy} onBusy={setBenchmarkBusy} />
+        </div>
       )}
     </main>
-  );
-
-  function renderStatus() {
-    const p = s.phase;
-    switch (p.kind) {
-      case 'idle':
-      case 'ready':
-        return null;
-      case 'decoding':
-        return <p className="status">Decoding audio…</p>;
-      case 'model-download':
-        return <Progress label="Downloading model (first run only)" fraction={p.fraction} />;
-      case 'local':
-        return <Progress label={`Separating on device${p.etaSec !== null ? ` · about ${p.etaSec >= 90 ? `${Math.round(p.etaSec / 60)} min` : `${p.etaSec} s`} left` : ''}`} fraction={p.fraction} />;
-      case 'paused':
-        return <p className="status">Paused: {p.reason}. The finished windows are saved; tap Resume below to continue.</p>;
-      case 'disk-done':
-        return (
-          <p className="status">
-            Done. The stems are saved on this device below.
-            {p.clipped.length > 0 ? ` Clipped above full scale: ${p.clipped.join(', ')}.` : ''}
-          </p>
-        );
-      case 'waking':
-        return <p className="status">Waking the processing server. The first request after it has been idle can take a minute or two…</p>;
-      case 'uploading':
-        return <Progress label="Uploading" fraction={p.fraction} />;
-      case 'queued-offline':
-        return <p className="status">Saved. We will send it to the server when you are back online.</p>;
-      case 'server': {
-        const j = p.job;
-        const label =
-          j.status === 'queued'
-            ? `Queued${j.queuePosition ? ` · position ${j.queuePosition}` : ''}${j.etaSec ? ` · ~${j.etaSec}s` : ''}`
-            : `${j.status[0]!.toUpperCase()}${j.status.slice(1)}${j.etaSec ? ` · ~${j.etaSec}s left` : ''}`;
-        return <Progress label={label} fraction={j.progress?.fraction ?? 0} />;
-      }
-      case 'error':
-        return (
-          <div className="error">
-            <p>{p.message}</p>
-            {p.canRetryOnServer && (
-              <button type="button" onClick={() => void s.start(true)}>
-                Process on our servers instead
-              </button>
-            )}
-          </div>
-        );
-    }
-  }
-}
-
-function Progress({ label, fraction }: { label: string; fraction: number }) {
-  return (
-    <div className="status">
-      <span>{label}</span>
-      <progress max={1} value={fraction} />
-    </div>
   );
 }

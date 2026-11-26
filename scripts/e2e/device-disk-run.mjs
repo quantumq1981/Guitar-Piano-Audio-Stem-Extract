@@ -46,19 +46,20 @@ async function open() {
   if (!(await page.evaluate(() => crossOriginIsolated))) await fail('page is not cross-origin isolated');
 }
 
-/** Starts the run and waits until it has really begun (the previous run's panel is gone, progress is shown). */
+/** Starts the run and waits until it has really begun (the working screen is up). */
 async function separate() {
-  await page.getByRole('button', { name: 'Separate', exact: true }).click();
-  await page.waitForFunction(() => !document.querySelector('.stored-run') && document.querySelector('.status'), null, { timeout: 120_000, polling: 100 });
+  await page.getByRole('button', { name: /^Separate into/ }).click();
+  await page.waitForFunction(() => !document.querySelector('.stored-run') && document.querySelector('.working'), null, { timeout: 120_000, polling: 100 });
 }
 
+/** From the home screen: pick the clip, choose 4 or 6 stems, and check it plans a disk-path run on this phone. */
 async function choose(scope) {
-  await page.locator('section.card').first().locator('input[type=file]').setInputFiles(clip);
-  await page.locator('.banner').waitFor();
-  await page.getByRole('radio', { name: scope === 'quick' ? /Quick/ : /Full/ }).check();
-  const banner = (await page.locator('.banner').innerText()).replace(/\s+/g, ' ');
-  if (!/Processing on this device/.test(banner) || !/saved on this device/.test(banner)) await fail(`not routed to the disk path: ${banner}`);
-  return banner;
+  await page.locator('.file-pick input[type=file]').setInputFiles(clip);
+  await page.locator('.facts').waitFor();
+  await page.locator('label.choice', { hasText: scope === 'quick' ? '4 stems' : '6 stems' }).click();
+  const plan = (await page.locator('.screen').innerText()).replace(/\s+/g, ' ');
+  if (!/Runs on This phone/.test(plan) || !/Keep this page open/.test(plan)) await fail(`not planned as a disk-path run on this phone: ${plan}`);
+  return plan;
 }
 
 /** Waits for the stored-run panel: 'complete' (stems) or 'paused'. Fails fast on an error. */
@@ -66,7 +67,7 @@ async function waitFor(state, timeout = 1_500_000) {
   const done = await page.waitForFunction(
     (want) => {
       const text = document.querySelector('main')?.textContent ?? '';
-      if (document.querySelector('.error')) return 'error';
+      if (document.querySelector('.notice--problem')) return 'error';
       if (want === 'complete' && /Stems on this device/.test(text)) return 'ok';
       if (want === 'paused' && /Paused separation/.test(text)) return 'ok';
       return false;
@@ -149,10 +150,13 @@ report('full, uninterrupted', full);
 check(Object.keys(full.stems).length === 6, 'six stems for full');
 check(!full.names.includes('input.f32'), 'stored song removed after completion');
 for (const [stem, s] of Object.entries(full.stems)) check(s.snr && s.snr.db >= 40, `${stem} parity vs server ≥ 40 dB`);
-check((await page.locator('.stored-run audio').count()) === 6, 'six players');
+check((await page.locator('.stem-row').count()) === 6, 'six stem rows');
 await open();
-await page.getByText('Stems on this device').waitFor({ timeout: 15_000 }).catch(() => { ok = false; console.log('CHECK FAILED: stems offered after a reload'); });
-console.log(`${at()} after reload: stems still offered`);
+// After a reload the home screen lists the stored stems; opening them shows the six rows again.
+await page.locator('button.row-card', { hasText: '6 stems' }).click({ timeout: 15_000 }).catch(() => { ok = false; console.log('CHECK FAILED: stems offered after a reload'); });
+await page.getByText('Stems on this device').waitFor({ timeout: 15_000 }).catch(() => { ok = false; console.log('CHECK FAILED: stored stems open after a reload'); });
+console.log(`${at()} after reload: stems still offered (${await page.locator('.stem-row').count()} rows)`);
+await page.getByRole('button', { name: 'Back' }).click();
 
 // 3: quick scope, uninterrupted, then paused + resumed.
 await choose('quick');
@@ -169,19 +173,20 @@ await separate();
 const windows = Math.ceil(pauseAfter); // progress fraction after N of 8 windows
 // Separation progress only (the model-download bar also uses <progress>).
 await page.waitForFunction((n) => {
-  const status = document.querySelector('.status');
-  const p = status?.querySelector('progress');
-  return /Separating on device/.test(status?.textContent ?? '') && p && Number(p.value) >= n / 8 - 1e-9;
+  const p = document.querySelector('.working[data-phase=local] progress');
+  return p && Number(p.value) >= n / 8 - 1e-9;
 }, windows, { timeout: 1_200_000, polling: 250 });
 await page.getByRole('button', { name: /Pause/ }).click();
 await waitFor('paused');
 console.log(`${at()} paused: ${(await page.locator('.stored-run').innerText()).replace(/\s+/g, ' ')}`);
 await open();
-await page.getByText('Paused separation').waitFor({ timeout: 15_000 });
-console.log(`${at()} after reload: ${(await page.locator('.stored-run p').first().innerText()).replace(/\s+/g, ' ')}`);
-await page.getByRole('button', { name: 'Resume', exact: true }).click();
+// After a reload the home screen offers the paused run with Resume.
+const pausedRow = page.locator('.row-card', { hasText: 'Paused' });
+await pausedRow.waitFor({ timeout: 15_000 });
+console.log(`${at()} after reload: ${(await pausedRow.innerText()).replace(/\s+/g, ' ')}`);
+await pausedRow.getByRole('button', { name: 'Resume', exact: true }).click();
 // A tap that does nothing must fail fast, with the page, rather than after the full timeout.
-await page.waitForFunction(() => /Separating on device|Downloading model/.test(document.querySelector('.status')?.textContent ?? ''), null, { timeout: 120_000, polling: 250 })
+await page.waitForFunction(() => document.querySelector('.working') !== null, null, { timeout: 120_000, polling: 250 })
   .catch(() => fail('Resume showed no progress within 2 min'));
 console.log(`${at()} resume started`);
 await waitFor('complete');

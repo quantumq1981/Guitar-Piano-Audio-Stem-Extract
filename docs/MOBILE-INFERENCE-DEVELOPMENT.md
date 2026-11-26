@@ -253,7 +253,7 @@ Container: 4 vCPU. Per-window time, one 7.8 s window:
 ## Stage V — the next stage: on-device separation in the main app (handoff for the next session)
 **Goal:** a phone gets free, private six-stem separation in the normal UI, with no server. Today the main app sends every phone to a server (`phone_form_factor` is a hard blocker in `packages/core/src/capability/routing.ts`). The free Pages build has no server (`API_BASE === null`), so on a phone the main app cannot separate at all; only the experimental card can. Proven in that card on the iPhone: a full 43.2 s song (8 windows, heap flat), OPFS streaming and playback, and 11.9–12.9 s per window at 1 thread (window test). Proven in Chromium and WebKit: identical parity at 1/2/4 threads. **Not yet proven on the phone: a long song run to completion.**
 
-**Step 0 — iPhone thread test (owner, ~5 min, before code).** Low Power Mode off. In the experimental card, set WASM threads to 1, 2 and 4 and run "Stage IV: load + 1 window" once each. Record the "Window 1 PASS in …" seconds and the heap line. The fastest count whose heap stays at or below ≈ 620 MiB becomes the default (`MOBILE_STAGE4_CANDIDATE.session.numThreads`, `STAGE4_THREAD_OPTIONS`). Then, at that count, run a 4–7-min song **to completion**, keeping Safari in the foreground with the screen on, and capture the end of the log. This is the long-run measurement that is still missing.
+**Step 0 — iPhone thread test (owner, ~5 min, before code).** Low Power Mode off. In the experimental card (home → "Device check & diagnostics"), set WASM threads to 1, 2 and 4 and run "Stage IV: load + 1 window" once each. Record the "Window 1 PASS in …" seconds and the heap line. The fastest count whose heap stays at or below ≈ 620 MiB becomes the default (`MOBILE_STAGE4_CANDIDATE.session.numThreads`, `STAGE4_THREAD_OPTIONS`). Then, at that count, run a 4–7-min song **to completion**, keeping Safari in the foreground with the screen on, and capture the end of the log. This is the long-run measurement that is still missing.
 
 **Step 1 — owner decision: model policy (ask before writing code).** The rule is one artifact on every tier.
 - **(A) Recommended: Stage IV becomes the single artifact everywhere.** The parity chain, with the contract at 40 dB per stem:
@@ -415,10 +415,10 @@ Results: 665 MiB for a 45 s song, ≤ 1 GiB at the 10-minute cap.
 - `platform/disk-store.ts` scans the stored run (complete / stopped / unusable / busy) and deletes it.
 - In the session, the stored run's bytes count as free, because a new run replaces it. That is the card's lesson: free before the quota check.
 - UI:
-  - `components/StoredRun.tsx` plays finished stems straight from OPFS and saves them (share sheet → Files on iOS, else a download). They survive reloads.
+  - `components/StoredStems.tsx` (was `StoredRun.tsx` before the redesign) plays finished stems straight from OPFS and saves them (share sheet → Files on iOS, else a download). They survive reloads.
   - The panel shows a paused run with **Resume**; "Delete from this device" frees the space.
   - A **Pause** button appears while a run is going.
-  - The banner shows the estimate and says that leaving Safari pauses the run.
+  - The choose screen shows the estimate, the space needed and that leaving Safari pauses the run (since the redesign; before, a routing banner).
 
 **Verified** (`scripts/e2e/device-disk-run.mjs`, real app, Playwright iPhone 15 emulation, 45 s of *D'Angelo – Lady*, 1 thread): **PASS in Chromium and in WebKit [M].**
 

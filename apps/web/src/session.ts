@@ -120,6 +120,8 @@ export function useSeparation() {
   }, []);
 
   const chooseFile = useCallback(async (f: File | null) => {
+    // Leaving the mixer (Back, or a new song) discards the ready phase, so its controls go too: stop the sound with them.
+    playerRef.current?.pause();
     setFile(f);
     setDuration(f ? await probeDuration(f) : null);
     setPhase({ kind: 'idle' });

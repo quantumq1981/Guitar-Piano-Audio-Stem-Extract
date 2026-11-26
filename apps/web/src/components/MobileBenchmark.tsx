@@ -165,7 +165,15 @@ export function MobileBenchmark({disabled, onBusy}: {disabled: boolean; onBusy: 
     document.addEventListener('visibilitychange', hide);
     void refreshStored(); // stems left by a run before a reload or a killed tab
     void storageProblem().then(setStorageBlocked);
-    return () => {document.removeEventListener('visibilitychange', hide); worker.current?.terminate(); clearTimeout(timer.current);};
+    return () => {
+      document.removeEventListener('visibilitychange', hide);
+      // Leaving the diagnostics screen mid-test unmounts the card: release the app-wide busy lock with the worker.
+      const wasRunning = worker.current !== null;
+      worker.current?.terminate(); worker.current = null;
+      clearTimeout(timer.current);
+      void wakeLock.current?.release().catch(() => {}); wakeLock.current = null;
+      if (wasRunning) onBusy(false);
+    };
   }, []);
   useEffect(() => () => {for (const s of stored?.stems ?? []) URL.revokeObjectURL(s.url);}, [stored]);
 

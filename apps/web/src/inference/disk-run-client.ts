@@ -3,6 +3,7 @@
  *  - page hidden → stop. iOS suspends background tabs and may kill them; the stems so far stay on disk and the run
  *    resumes from its last whole block, so stopping costs at most one window.
  *  - battery below the local limit while not charging → stop (resumable).
+ *  Both are checked once at start too: a resume bypasses routing, and the page may already be hidden.
  *  - screen wake lock while running (Safari 16.4+, Chromium), so a locked screen does not hide the page.
  * No crash marker: a killed disk run is routine on a phone and resumes (routing does not consult it for this path).
  */
@@ -69,6 +70,7 @@ export function runOnDisk(request: ToDeviceRun, cb: DiskRunCallbacks): DiskRunHa
     battery = b;
     b.addEventListener('levelchange', onBattery);
     b.addEventListener('chargingchange', onBattery);
+    onBattery(); // the level may already be low: a resume skips routing's battery check
   }).catch(() => {});
   void navigator.wakeLock?.request('screen').then((lock) => {
     if (settle) wakeLock = lock;
@@ -98,6 +100,11 @@ export function runOnDisk(request: ToDeviceRun, cb: DiskRunCallbacks): DiskRunHa
   worker.onerror = (e) => settle?.(new Error(e.message || 'On-device worker crashed'));
   worker.onmessageerror = () => settle?.(new Error('On-device worker message could not be decoded'));
 
+  // The page may have been hidden before this call (startDisk decodes first): no event will report that.
+  if (document.visibilityState === 'hidden') {
+    onVisibility();
+    return { done, stop };
+  }
   if (request.type === 'start') worker.postMessage(request, [request.left.buffer, request.right.buffer]);
   else worker.postMessage(request);
   return { done, stop };

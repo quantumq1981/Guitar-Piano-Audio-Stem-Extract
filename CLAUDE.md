@@ -84,6 +84,8 @@
   The owner's iPhone UA is desktop-class → classified **tablet**; rules key on "not desktop". Crash flag guards desktop only.
 - Disk path: `inference/disk-run.ts` (shared with the card) + `device-run.worker.ts` + `disk-run-client.ts` (hidden/battery → pause,
   wake lock) + `platform/disk-store.ts` + `components/StoredRun.tsx` (play/save from OPFS, Resume, Delete). Quick scope writes 4 stems.
+- Merged as PR #24 and live on Pages (2026-11-26). Follow-up (Codex): `runOnDisk` checks battery and visibility once at start,
+  since a resume skips routing and the page can be hidden during decode (`apps/web/test/disk-run-client.test.ts`).
 - Next: physical-iPhone test of the main app, step 0 thread numbers, a synced mixer from disk, an immutable model URL.
 
 ## Status (2026-11-25, latest) — Stage V step 1 done: Stage IV is the primary on every tier

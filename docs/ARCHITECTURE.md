@@ -16,7 +16,7 @@ The source spec (`Guitar -Piano-ASE-Separation App.md`) is directionally right: 
 | 1 | Browser default should be 4-stem `htdemucs_ft` because the 6-stem model "adds memory pressure" | **Inverted** | `htdemucs_ft` is a *bag of 4* models: 4 × 316 MB fp32, 4× compute. `htdemucs_6s` is a single 258 MB model **[M: Hub file sizes]** | One model everywhere: `htdemucs_6s`. "Quick" is a 4-stem *projection* of its output (other += guitar + piano), which costs nothing extra |
 | 2 | A 4-stem browser default for a *guitar and piano* app | Product contradiction | 4-stem output has no guitar or piano stem | The device tier runs the 6-stem model or nothing |
 | 3 | "WebGPU models ~80 MB" | False | The WebGPU-compatible `kramp/htdemucs-6s-webgpu-onnx` is 285 MB **[M]**. An fp16-weights fold we built is 143 MB **[M]** | Registry pins exact bytes and sha256 |
-| 4 | ~1.1 GB RAM per segment **[V: StemSplit, M4 Pro]**; iOS abort at 1 GB | Vendor figure is about half of reality on x64 | ORT 1.31 CPU EP peaks at **2.40 GiB** steady state with arena and mem-pattern off, and **4.7 GiB** with ORT defaults by the 2nd run **[M]** | The 6-stem model is **not viable in any mobile browser**. Phones and tablets always route to the server, which the measured budget now proves |
+| 4 | ~1.1 GB RAM per segment **[V: StemSplit, M4 Pro]**; iOS abort at 1 GB | Vendor figure is about half of reality on x64 | ORT 1.31 CPU EP peaks at **2.40 GiB** steady state with arena and mem-pattern off, and **4.7 GiB** with ORT defaults by the 2nd run **[M]** | True for v1 (fp32, 2.4 GiB). **Superseded 2026-11-26:** the v2 Stage IV artifact holds a 616 MiB WASM heap, flat over a whole song, on a physical iPhone **[M]**, so phones and tablets now run on device on the disk path (stems stream to OPFS). Routing decides on that evidence, not on form factor |
 | 5 | Same ONNX files ⇒ "byte-comparable" outputs | False | Kernels, FMA and reduction order differ per EP. Browser WASM vs server CPU = **64.3 dB SNR** with v1, **91.8 dB** with v2, not identical **[M]** | Parity contract is numeric (`stemParity` in core): per stem, SNR ≥ 40 dB (`PARITY_MIN_SNR_DB`) **or** error ≤ −90 dB re mix (`PARITY_MAX_ERROR_DB_RE_MIX`, owner-approved 2026-11-25 for near-silent stems) |
 | 6 | Same files ⇒ no drift | Incomplete | Decoders drift too: browser `decodeAudioData` trims MP3/AAC priming differently from FFmpeg | Server jobs always upload the *original file*; the server decodes with FFmpeg |
 | 7 | 40 MB upload cap with a 6-minute limit | Inconsistent | A 6-minute 16-bit 44.1 kHz stereo WAV is 63.5 MB | Cap raised to **64 MiB** |
@@ -48,10 +48,10 @@ Bugs found while building, each now handled in code:
 | wasm32 address space | 4 GiB hard limit | spec |
 | Server job duration cap | 360 s | policy |
 | Upload cap | 64 MiB | policy (see §0 #7) |
-| Device duration cap | 90 s with WebGPU or threaded WASM (WASM was 30 s on an estimate until 2026-11-25; v2 WASM at 4 threads is about real time per song [M]) | policy |
+| Device duration cap | Desktop: 90 s with WebGPU or threaded WASM (WASM was 30 s on an estimate until 2026-11-25; v2 WASM at 4 threads is about real time per song [M]). Phones and tablets (disk path): 600 s | policy |
 | Result retention | 7 days, HMAC-signed URLs | policy |
 
-Design rule: **no client architecture may assume more than ~1 GiB of headroom on mobile.** The measured 2.4 GiB session therefore makes the server path mandatory for phones *and* tablets, not merely the default.
+Design rule: **no client architecture may assume more than ~1 GiB of headroom on mobile.** The measured 2.4 GiB v1 session made the server mandatory for phones *and* tablets. The v2 artifact's measured browser heap is 616 MiB, so since 2026-11-26 a phone or tablet runs on device when the evidence holds: the artifact has a measured `browserHeapBytes`, OPFS is writable (not Safari Private Browsing), the page is cross-origin isolated, and the disk-run projection fits the ceiling. The projection is the larger of the decode phase (file + 3 decoded copies) and separation (heap + overlap-add state); 665 MiB for a 45 s song, ≤ 1 GiB at the 10-minute cap.
 
 ---
 
@@ -175,7 +175,7 @@ Cross-origin isolation uses `COOP: same-origin` and `COEP: require-corp`. Safari
 
 | Risk | Likelihood / impact | Detection | Mitigation in code |
 |---|---|---|---|
-| Silent tab kill (OOM) | High on mobile / lost work | no event fires; `localStorage` crash marker found at next start | phones and tablets never run locally (measured budget); marker forces server next time; marker kept when ORT throws non-abort errors |
+| Silent tab kill (OOM, or iOS suspending a hidden tab) | High on mobile / lost work | no event fires; on the disk path the stored run is found at next start | **disk path (phones, tablets):** the stems so far stay in OPFS and the run resumes bit-identically from its last whole block, so a kill costs at most one window; a hidden page stops the run on purpose. **Memory path (desktop):** `localStorage` crash marker forces the server next time; without a server the banner offers to clear it |
 | WASM heap exhaustion | High below 4 GiB address space | ORT `create()` / `run()` throws | v2 heap is 616 MiB (measured), capped `WebAssembly.Memory` (1 GiB, then 768 MiB); WASM only on cross-origin-isolated pages, clips ≤ 90 s; arena off; error UI offers server |
 | WebGPU session-creation failure (`ConstantOfShape`, `transformer_memcpy`-class placement errors) | Medium / no local path | `InferenceSession.create` rejects | canonical artifact is the constant-folded export; registry refuses unfolded models in the browser (`model_not_browser_eligible`); fallback to server |
 | Thermal throttling | Medium on laptops | none since 2026-11-25 | **Guard removed.** Chromium's Compute Pressure `critical` follows CPU utilisation, so a 4-thread run reached it from its own load (fair → serious → critical at 15 s) and was terminated mid-window; without it the same run finished [M]. A hot device downclocks: slower, nothing lost. |

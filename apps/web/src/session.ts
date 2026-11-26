@@ -211,9 +211,16 @@ export function useSeparation() {
   }
 
   const resumeStored = useCallback(async () => {
-    if (stored?.state !== 'stopped' || !caps || diskRun.current) return;
+    if (stored?.state !== 'stopped' || diskRun.current) return;
     setPhase({ kind: 'local', fraction: stored.done / stored.total, etaSec: null });
-    await driveDisk(runOnDisk({ type: 'resume', outputs: stored.outputs, threads: deviceThreads(caps) }, diskCallbacks));
+    // The stored-run panel can appear before the capability probe resolves (measured in WebKit after a reload), and
+    // Resume needs only the thread count from it: wait for the probe rather than ignore the tap.
+    let current: CapabilitySnapshot | null = caps;
+    if (current === null) {
+      current = await gatherCapabilities();
+      setCaps(current);
+    }
+    await driveDisk(runOnDisk({ type: 'resume', outputs: stored.outputs, threads: deviceThreads(current) }, diskCallbacks));
   }, [stored, caps]);
 
   const pauseDisk = useCallback(() => diskRun.current?.stop('you paused it'), []);

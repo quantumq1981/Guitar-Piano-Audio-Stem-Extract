@@ -43,7 +43,7 @@ export function RoutingBanner({ decision, serverConfigured, estimateSec, replace
           the first model download (130 MB).
         </p>
       )}
-      {decision.warnings.includes('wasm_slow_path') && !disk && <p className="muted">Runs on the CPU with WebAssembly: on a 4-core computer it takes about as long as the song, plus the first model download.</p>}
+      {decision.warnings.includes('wasm_slow_path') && !disk && estimateSec === null && <p className="muted">Runs on the CPU with WebAssembly: on a 4-core computer it takes about as long as the song, plus the first model download.</p>}
       {onDevice && replacesStored && <p className="muted">This replaces the stems (or paused run) stored on this device.</p>}
       {!onDevice && !serverConfigured && (
         <p className="warning">

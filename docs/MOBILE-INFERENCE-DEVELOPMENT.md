@@ -1,6 +1,6 @@
 # Mobile inference development — Engineering handoff
 
-Checkpoint: 2026-11-25 UTC (Stage V: resume built; step 1 done, Stage IV is the primary on every tier; see "Stage V step 1 — done"). Earlier: 2026-11-24 (Stage IV; first physical iPhone pass recorded). PR #12 and the Stage IV PR stacked on it remain open; experimental work is not production-approved. Stage IV below supersedes the Stage III remaining-work list.
+Checkpoint: 2026-11-26 UTC (Stage V: step 1 done, Stage IV is the primary everywhere; step 2 done, phones separate on device in the main app; see "Stage V step 2 — done"). Earlier: 2026-11-24 (Stage IV; first physical iPhone pass recorded). PR #12 and the Stage IV PR stacked on it remain open; experimental work is not production-approved. Stage IV below supersedes the Stage III remaining-work list.
 
 ## Stage I — Original Claude development
 Read [CLAUDE.md](../CLAUDE.md), [original engineering specification](../Guitar%20-Piano-ASE-Separation%20App.md), [ARCHITECTURE.md](ARCHITECTURE.md), and [API.md](API.md). Preserve these historical documents. Stage I deliberately routes phones to server because native CPU peak RSS was 2.40 GiB with arena/pattern disabled, 4.7 GiB with defaults. Original browser/server parity was 64.3 dB; original server RTF 0.45–0.68 on four vCPU. Stage II investigates whether local six-stem inference can become practical without paid hosting; it does not invalidate the original safeguards.
@@ -376,6 +376,77 @@ Done in this session: the measurement that the step 1 decision needs, and step 2
 - `budget.ts` still uses the v1 activation estimates (2000 MiB). That over-estimates v2, so routing errs towards the server, never towards unsafe.
 - Main-app playback still decodes stems into memory.
 
+### Stage V step 2 — done: phones and tablets separate on device in the main app (2026-11-26)
+**Routing (core, `capability/routing.ts`), by evidence instead of form factor.** A non-desktop device (phone or tablet) takes the **disk path** when all of these hold:
+- the artifact has a measured `browserHeapBytes` (v2: 616 MiB, iPhone);
+- OPFS is writable (`caps.opfsWritable`, probed with `getDirectory()`; false in Safari Private Browsing);
+- the page is cross-origin isolated;
+- the battery is fine and the device does not report 2 GiB or less;
+- the song is ≤ `LOCAL_LIMITS.maxDurationSecMobile` (600 s);
+- the disk-run projection fits the platform ceiling;
+- storage holds the model (when not cached) plus the projected stems plus the stored song.
+
+Notes on these rules:
+- `deviceMemory` unknown is **not** a blocker on this path: the heap was measured on an iPhone, which does not report it.
+- New reasons: `mobile_profile_unmeasured`, `storage_not_writable`, `insufficient_storage_for_stems`. `phone_form_factor` and `device_memory_unknown_mobile` are gone.
+- The owner's iPhone sends a desktop-class UA ("Macintosh … Version/27.2"), so `classifyUserAgent` calls it a **tablet**. The rules key on "not desktop" for that reason, and a test pins it.
+- The crash marker blocks only the in-memory (desktop) path. A killed disk run resumes, so phones are never locked out. Desktop without a server: the banner offers "Try on this device again", which clears the marker; before, the lock-out was permanent.
+
+**Memory (`projectDiskRunPeak` in `memory/budget.ts`).** The projection is the larger of two phases, which do not overlap:
+- **decode:** the file plus `DISK_RUN_DECODE_COPIES` = 3 decoded copies. The AudioBuffer and the transfer copies are certain; one resampler temporary is an allowance **[E]**.
+- **separation:** the measured heap plus overlap-add state plus one block in flight.
+
+Results: 665 MiB for a 45 s song, ≤ 1 GiB at the 10-minute cap.
+
+**Also in core:**
+- `deviceOutputs(scope)`: Full writes 6 stems, Quick writes 4 (guitar and piano folded into other), so 33 % less storage.
+- `resumeExpectationFor(model, outputs)`: the written outputs are part of a stored run's identity.
+- `deviceThreads()`: 1 on phones and tablets until step 0 is measured; up to 4 on desktop.
+- `estimateDeviceSeconds()`: from the measured seconds per window (iPhone 12.5 s at 1 thread; 4 vCPU 18.0 / 10.1 / 5.7 s at 1 / 2 / 4).
+
+**Web**
+- `inference/disk-run.ts` is the worker-side runner, extracted from the card: store the song, write `run.json`, separate from the stored file into the scope's projected stems, resume, lock retry. The card and the main app share it.
+- `device-run.worker.ts` opens the session from the verified persistent model cache, with registry settings.
+- `inference/disk-run-client.ts` handles the lifecycle:
+  - page hidden → pause;
+  - battery low → pause;
+  - a wake lock while running;
+  - no crash marker.
+- `platform/disk-store.ts` scans the stored run (complete / stopped / unusable / busy) and deletes it.
+- In the session, the stored run's bytes count as free, because a new run replaces it. That is the card's lesson: free before the quota check.
+- UI:
+  - `components/StoredRun.tsx` plays finished stems straight from OPFS and saves them (share sheet → Files on iOS, else a download). They survive reloads.
+  - The panel shows a paused run with **Resume**; "Delete from this device" frees the space.
+  - A **Pause** button appears while a run is going.
+  - The banner shows the estimate and says that leaving Safari pauses the run.
+
+**Verified** (`scripts/e2e/device-disk-run.mjs`, real app, Playwright iPhone 15 emulation, 45 s of *D'Angelo – Lady*, 1 thread): **PASS in Chromium and in WebKit [M].**
+
+| Check | Chromium | WebKit (JavaScriptCore, persistent profile) |
+|---|---|---|
+| Routing | disk path, projected peak 665 MiB | same |
+| Full scope, uninterrupted: per-stem SNR vs server CLI, same clip | 85.1–95.0 dB | 93.7–107.0 dB |
+| Full stems vs the experimental card's stems | byte-identical (same SHA-256) | byte-identical |
+| Quick scope: `other` (other + guitar + piano) vs server quick | 90.3 dB | 96.7 dB |
+| Quick: vocals, drums, bass vs full | byte-identical (projection only sums into `other`) | byte-identical |
+| Stored song after completion | removed | removed |
+| Stems after a reload | offered | offered |
+| Quick paused after 2 / 8 windows → reload → Resume | "2 of 8 windows are finished"; resumed stems byte-identical | same |
+
+Bugs found by these runs and fixed:
+- **Resume did nothing in WebKit after a reload.** The stored-run panel appeared before the capability probe resolved, and `resumeStored` silently returned while `caps` was null. It now waits for the probe; after the fix, Resume starts within 1 s.
+- **The old stems stayed on screen** while a new run deleted them. They are now hidden first.
+- **Pause was only offered once windows were running.** It is now shown for the whole run, model download included.
+
+Cosmetic: WebKit logs "Context is stopped" on a reload after a pause (an audio context torn down by the navigation).
+
+**Not done:**
+- A **mixer** with synchronised playback of all stems from disk. Six decoded stems of a long song do not fit in phone memory; options are a streamed mix-down to one file, or synced media elements. Each stem plays on its own today.
+- Step 0 (iPhone 1/2/4 threads).
+- The physical-iPhone test of the main app.
+- Whether iOS freezes rather than kills a hidden tab.
+- An immutable hosting URL for the model.
+
 **Later (unchanged):** further exact memory cuts (chunk the frequency-branch DConv along its 512-row batch; run the ISTFT tail per source; both remove 63 MiB tensors); other devices (iPads, older iOS → ORT 1.23.2, Android Chrome); WebGPU (static shapes, shader-f16, GPU-process memory on iOS).
 
 ## Stage IV — remaining work (historical list; Stage V above supersedes items 1, 2 and 4)
@@ -398,7 +469,11 @@ Potential Bandleader HQ integration with Tab Translator Pro, Chord Sheet Maker P
 ## Fresh-session prompt
 Read CLAUDE.md, docs/ARCHITECTURE.md and this file (main branch; all Stage IV work through PR #19 is merged). Check the latest PRs and Actions runs before changing anything. Start Stage V:
 1. Step 1 is decided and built: option A (Stage IV is the primary on every tier) and the level-aware parity rule, see "Stage V step 1 — done". Step 2b (resume) is built.
-2. Next: step 2 (phones on device: routing, limits, memory projection from the measured v2 heap, stem choice), then step 3 (main-app playback and export from OPFS, wake lock, resume in the main UI) and step 4. Ask the owner for step 0 iPhone thread numbers if they are not recorded here; they set the default thread count but do not block the work.
+2. Steps 2 and most of 3 are built ("Stage V step 2 — done"): phones run on device in the main app with resume, playback and save from OPFS. Next:
+   - the physical-iPhone test of the main app;
+   - step 0 thread numbers (they set `deviceThreads` and `DEVICE_SECONDS_PER_WINDOW`);
+   - a synced mixer from disk;
+   - an immutable model URL.
 3. The owner's standing rule (2026-11-25): make improvements by judgment, document them, keep every change easy to retrace.
 
 Keep main-app routing for non-phone devices and the server path working. Do not repeat completed experiments. Tag numbers [M]/[V]/[E], and do not claim device results from Chromium or WebKit runs. Record measured results here as work progresses. Tab Translator Pro is not attached; its lessons are in the section above.

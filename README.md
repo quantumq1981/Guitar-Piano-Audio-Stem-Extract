@@ -4,11 +4,11 @@ Mobile-first stem separation that isolates **guitar (lead and rhythm)** and **pi
 
 | Tier | What | Where |
 |---|---|---|
-| 1 | Server separation, the guaranteed path for phones and tablets | `packages/server` (Node, onnxruntime-node, FFmpeg) |
-| 2 | In-browser separation for capable desktops (WebGPU, or multithreaded WASM) | `apps/web` (React PWA, onnxruntime-web) |
+| 1 | Server separation: the lead/rhythm guitar split, piano refinement and long tracks | `packages/server` (Node, onnxruntime-node, FFmpeg) |
+| 2 | In-browser separation, no server needed: phones and tablets (stems saved on the device, resumable) and desktops (multithreaded WASM) | `apps/web` (React PWA, onnxruntime-web) |
 | shared | Routing, memory budgets, chunked overlap-add engine, WAV codec, API contract | `packages/core` (pure TypeScript, zero dependencies) |
 
-Every tier runs the same sha256-pinned ONNX model, `htdemucs_6s`, constant-folded for WebGPU. The shared engine means the browser and server outputs match to **64 dB SNR**.
+Every tier runs the same sha256-pinned ONNX model: `htdemucs_6s` with fp16-stored weights, memory-optimised for phones (graph + external data, 130 MB). The shared engine means the browser and server outputs match to **91.8 dB SNR** [measured].
 
 Design and measurements: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). API and CLI: [`docs/API.md`](docs/API.md). Original brief: `Guitar -Piano-ASE-Separation App.md`.
 
@@ -50,10 +50,12 @@ Pages serves the **built** app from `apps/web/dist`, not the repository files. B
 
 What works on Pages alone:
 
-| Device | Quick / Full, ≤ 90 s (WebGPU) or ≤ 30 s (WASM) | Guitar focus, longer tracks, piano refine |
+| Device | Quick / Full on the device | Guitar focus, piano refine, longer tracks |
 |---|---|---|
-| Desktop Chrome / Edge | ✅ on-device (downloads the 285 MB model from Hugging Face once, then caches it) | needs a server |
-| Phone / tablet | needs a server (by design: the model needs about 2.4 GiB of RAM) | needs a server |
+| Phone / tablet (Safari normal tab, Chrome) | ✅ up to 10 min. The stems are saved on the device as they are made and stay after a reload; leaving the browser pauses the run and **Resume** continues it. About 2× the song length on an iPhone at one thread [measured per window]. Safari Private Browsing cannot store files, so it needs a server. | needs a server |
+| Desktop Chrome / Edge / Safari | ✅ up to 90 s, about real time on 4 cores | needs a server |
+
+The first run downloads the 130 MB model from this site and caches it (SHA-256 verified).
 
 To enable the server path, run `stemsplit serve` somewhere reachable over **HTTPS**. Then set the repository variable **`VITE_API_BASE`** (Settings → Secrets and variables → Actions → Variables) to that URL and re-run the workflow.
 

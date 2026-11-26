@@ -44,6 +44,12 @@ export interface CapabilitySnapshot {
   readonly storageAvailableBytes: number | null;
   /** True when the primary model is already in Cache Storage with the pinned sha256. */
   readonly modelCached: boolean;
+  /**
+   * The origin-private file system can be opened (`navigator.storage.getDirectory()` resolves). False in Safari
+   * Private Browsing (it rejects with UnknownError while `estimate()` still reports a quota, measured in WebKit);
+   * null when not probed. The disk path (phones and tablets) needs it to stream stems to storage.
+   */
+  readonly opfsWritable: boolean | null;
 }
 
 export const DEVICE_MEMORY_BUCKETS = [0.25, 0.5, 1, 2, 4, 8] as const;

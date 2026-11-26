@@ -57,14 +57,29 @@ async function probeStorage(): Promise<number | null> {
   }
 }
 
+/**
+ * Whether the origin-private file system opens. getDirectory() creates nothing. Safari Private Browsing rejects it
+ * (UnknownError "unknown transient reason") while estimate() still reports a quota, measured in WebKit.
+ */
+async function probeOpfs(): Promise<boolean | null> {
+  if (typeof navigator.storage?.getDirectory !== 'function') return false;
+  try {
+    await navigator.storage.getDirectory();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function gatherCapabilities(): Promise<CapabilitySnapshot> {
   const nav = navigator as Navigator & NavigatorExtras;
   const ua = classifyUserAgent(nav.userAgent, nav.maxTouchPoints ?? 0, nav.userAgentData?.mobile ?? null);
-  const [webgpu, battery, storageAvailableBytes, modelCached] = await Promise.all([
+  const [webgpu, battery, storageAvailableBytes, modelCached, opfsWritable] = await Promise.all([
     probeWebGpu(nav),
     probeBattery(nav),
     probeStorage(),
     isModelCached(PRIMARY_SEPARATION_MODEL),
+    probeOpfs(),
   ]);
   return {
     ...ua,
@@ -77,5 +92,6 @@ export async function gatherCapabilities(): Promise<CapabilitySnapshot> {
     online: nav.onLine,
     storageAvailableBytes,
     modelCached,
+    opfsWritable,
   };
 }

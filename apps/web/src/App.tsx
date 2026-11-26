@@ -5,7 +5,8 @@ import { SERVER_LIMITS } from '@stemsplit/core';
 import { GpuDiagnostics } from './components/GpuDiagnostics.tsx';
 import { RoutingBanner } from './components/RoutingBanner.tsx';
 import { StemMixer } from './components/StemMixer.tsx';
-import { useSeparation } from './session.ts';
+import { StoredRun } from './components/StoredRun.tsx';
+import { BUSY_PHASES, useSeparation } from './session.ts';
 
 const SCOPES: ReadonlyArray<{ id: SeparationScope; label: string; detail: string }> = [
   { id: 'quick', label: 'Quick', detail: 'Vocals, drums, bass, other' },
@@ -16,7 +17,7 @@ const SCOPES: ReadonlyArray<{ id: SeparationScope; label: string; detail: string
 export function App() {
   const s = useSeparation();
   const [benchmarkBusy, setBenchmarkBusy] = useState(false);
-  const busy = benchmarkBusy || ['decoding', 'model-download', 'local', 'waking', 'uploading', 'server'].includes(s.phase.kind);
+  const busy = benchmarkBusy || BUSY_PHASES.has(s.phase.kind);
 
   return (
     <main className="app">
@@ -56,7 +57,15 @@ export function App() {
           </label>
         </fieldset>
 
-        {s.decision && <RoutingBanner decision={s.decision} serverConfigured={s.serverConfigured} />}
+        {s.decision && (
+          <RoutingBanner
+            decision={s.decision}
+            serverConfigured={s.serverConfigured}
+            estimateSec={s.estimateSec}
+            replacesStored={s.stored !== null}
+            onClearCrash={s.clearCrash}
+          />
+        )}
 
         <button
           type="button"
@@ -68,9 +77,15 @@ export function App() {
         </button>
       </section>
 
+      {renderStatus()}
+      {s.diskActive && (
+        <button type="button" onClick={s.pauseDisk}>
+          Pause (resume later)
+        </button>
+      )}
+      {s.stored && <StoredRun stored={s.stored} busy={busy} onResume={() => void s.resumeStored()} onDelete={() => void s.deleteStored()} />}
       <GpuDiagnostics disabled={busy} />
       <MobileBenchmark disabled={busy} onBusy={setBenchmarkBusy} />
-      {renderStatus()}
 
       {s.phase.kind === 'ready' && s.player.current && (
         <>
@@ -96,7 +111,16 @@ export function App() {
       case 'model-download':
         return <Progress label="Downloading model (first run only)" fraction={p.fraction} />;
       case 'local':
-        return <Progress label={`Separating on device${p.etaSec !== null ? ` · ~${p.etaSec}s left` : ''}`} fraction={p.fraction} />;
+        return <Progress label={`Separating on device${p.etaSec !== null ? ` · about ${p.etaSec >= 90 ? `${Math.round(p.etaSec / 60)} min` : `${p.etaSec} s`} left` : ''}`} fraction={p.fraction} />;
+      case 'paused':
+        return <p className="status">Paused: {p.reason}. The finished windows are saved; tap Resume below to continue.</p>;
+      case 'disk-done':
+        return (
+          <p className="status">
+            Done. The stems are saved on this device below.
+            {p.clipped.length > 0 ? ` Clipped above full scale: ${p.clipped.join(', ')}.` : ''}
+          </p>
+        );
       case 'waking':
         return <p className="status">Waking the processing server. The first request after it has been idle can take a minute or two…</p>;
       case 'uploading':

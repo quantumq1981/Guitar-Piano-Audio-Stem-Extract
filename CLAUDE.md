@@ -8,8 +8,8 @@
   node:http API, CLI (`src/cli.ts`). `scripts/` holds measurement tools (mem-probe, compare-models, segment-consistency).
 - `apps/web` — Tier 2 React PWA: capability probe, inference worker (onnxruntime-web), server client, stem player, SW.
 - `docs/ARCHITECTURE.md` (design + measured numbers), `docs/API.md` (contract). `scripts/fold_webgpu.py`, `scripts/e2e/`.
-- Mobile inference (experimental card on Pages, not yet in the main app): `docs/MOBILE-INFERENCE-DEVELOPMENT.md` is the handoff;
-  its "Stage V" section is the next stage (on-device separation in the main app). Read it first.
+- Mobile inference: on-device separation runs in the main app (phones/tablets on the disk path since 2026-11-26); the experimental
+  card stays for device tests. `docs/MOBILE-INFERENCE-DEVELOPMENT.md` is the handoff ("Stage V"); read it first.
   `scripts/mobile_graph.py` (PR #12 folding), `scripts/mobile_memory.py` (Stage IV exact memory passes, two-level reductions,
   live-memory simulator; tests `python -m unittest scripts/test_mobile_memory.py`), `scripts/mobile_fixture.py` (licence-free
   six-stem music fixture), `scripts/mobile-webgpu-check.mjs` (Chromium WASM/WebGPU gate), `.github/workflows/mobile-graph.yml`.
@@ -57,6 +57,10 @@
   with sha256 (both files) + parity (`stemParity`: ≥ 40 dB SNR or error ≤ −90 dB re mix; `compare-models.ts` exits non-zero) and
   switching all tiers at once. Session settings per tier come from the registry (`graphOptimizationFor`), never hard-coded.
 - Do not abort local runs on Compute Pressure: Chromium's `critical` is CPU utilisation, i.e. our own threads (measured).
+- Device runs on phones/tablets go through OPFS (disk path), never in-memory: decode → transfer → worker stores `input.f32` and
+  drops it BEFORE creating the session (the two memory phases must not overlap). A new run's stored predecessor counts as free space.
+- Disk-path E2E: `VITE_MODEL_MIRROR=/__models` build + model under `dist/__models/`, server-CLI references under `dist/__ref/<scope>/`,
+  `vite preview`, then `node scripts/e2e/device-disk-run.mjs http://localhost:4173 <clip.wav> [--webkit]`.
 - Every job status change goes through `transition()`; never assign `status` directly.
 - Tag numbers in docs as [M]easured / [V]endor / [E]stimate. Do not present estimates as facts.
 - Per-stem SNR on a stem ≤ −50 dB re mix measures how quiet the stem is, not model error: read `compare-models.ts`'s
@@ -73,6 +77,14 @@
   `NoModificationAllowedError` when reopening a stopped run's files. In Chromium a reload is not a kill (visibilitychange
   fires first); E2E kills use CDP `Page.crash`.
 - The MP3s in the repo root are the owner's test material; never commit derived stems (`out/` is gitignored).
+
+## Status (2026-11-26) — Stage V step 2: phones and tablets separate on device in the main app
+- Routing by evidence (`capability/routing.ts`): non-desktop → **disk path** when the artifact has a measured `browserHeapBytes`,
+  `caps.opfsWritable`, isolation, battery, ≤ 600 s, `projectDiskRunPeak` ≤ ceiling, storage for model + projected stems + song.
+  The owner's iPhone UA is desktop-class → classified **tablet**; rules key on "not desktop". Crash flag guards desktop only.
+- Disk path: `inference/disk-run.ts` (shared with the card) + `device-run.worker.ts` + `disk-run-client.ts` (hidden/battery → pause,
+  wake lock) + `platform/disk-store.ts` + `components/StoredRun.tsx` (play/save from OPFS, Resume, Delete). Quick scope writes 4 stems.
+- Next: physical-iPhone test of the main app, step 0 thread numbers, a synced mixer from disk, an immutable model URL.
 
 ## Status (2026-11-25, latest) — Stage V step 1 done: Stage IV is the primary on every tier
 - Owner chose option A and the level-aware parity rule, plus a standing rule: improve by judgment, document, keep it retraceable.

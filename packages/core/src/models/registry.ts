@@ -91,6 +91,11 @@ export interface ModelArtifact {
    * heap is measured to fit; absent: no cap.
    */
   readonly browserWasmMemoryCapPages?: readonly number[];
+  /**
+   * Measured peak of the browser WASM heap (reserved bytes) over a whole song with OPFS streaming, the evidence that
+   * lets phones and tablets run the artifact on device. Absent: no measured mobile profile, so they use the server.
+   */
+  readonly browserHeapBytes?: number;
   /** Graph optimisation each tier must use (validated settings). Absent: 'all' everywhere. */
   readonly graphOptimization?: Readonly<Record<ExecutionTier, GraphOptimization>>;
   readonly notes: readonly string[];
@@ -229,6 +234,8 @@ export const HTDEMUCS_6S_STAGE4: ModelArtifact = {
   graphOptimization: { server: 'all', native: 'all', browser: 'disabled' },
   // 1 GiB, then 768 MiB: the heap peaks at 616 MiB reserved (iPhone and Chromium, byte-identical sequence) [M].
   browserWasmMemoryCapPages: [16_384, 12_288],
+  // 616 MiB reserved (510 touched), flat over a 43 s song on a physical iPhone and over 8 windows in Chromium [M].
+  browserHeapBytes: 616 * 1024 * 1024,
   notes: [
     'vs. the fp32 v1 artifact, 8 songs × 3 windows: passes stemParity on every stem with graph optimisation disabled and all (min SNR 40.1 dB, on a piano at −63.5 dB re mix; error ≤ −90 dB re mix wherever SNR < 49 dB) [M].',
     'Server, 4 vCPU, 31.2 s, two quiet runs each: RTF 0.44–0.46 and peak RSS 1.50–1.59 GiB with optimisation all (disabled: 0.48–0.49, 1.48–1.63 GiB), vs 0.58–0.62 and 2.76 GiB for v1 [M] (docs/ARCHITECTURE.md § 8).',

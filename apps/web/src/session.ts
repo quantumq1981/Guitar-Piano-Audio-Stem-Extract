@@ -4,11 +4,14 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CapabilitySnapshot, CreateJobRequest, JobRecord, JobWarning, RouteDecision, SeparationScope, StemName, UserPreference } from '@stemsplit/core';
-import { PRIMARY_SEPARATION_MODEL, SCOPE_OUTPUTS, decideRoute } from '@stemsplit/core';
+import { PRIMARY_SEPARATION_MODEL, SCOPE_OUTPUTS, decideRoute, deviceOutputs, deviceThreads, estimateDeviceSeconds, requireIO } from '@stemsplit/core';
 import { ServerClient } from './api/server-client.ts';
 import { decodeForModel, probeDuration } from './audio/decode.ts';
 import { StemPlayer } from './audio/stem-player.ts';
+import { DiskRunStopped, runOnDisk, type DiskRunHandle } from './inference/disk-run-client.ts';
 import { LocalAbortError, runLocal } from './inference/local-client.ts';
+import { clearCrashFlag } from './platform/crash-flag.ts';
+import { deleteDeviceRun, scanDeviceRun, type StoredDeviceRun } from './platform/disk-store.ts';
 import { gatherCapabilities } from './platform/probe.ts';
 import { outbox, requestBackgroundFlush } from './platform/outbox.ts';
 
@@ -22,7 +25,7 @@ const configuredApi = (import.meta.env.VITE_API_BASE as string | undefined)?.tri
 export const API_BASE: string | null = configuredApi ? configuredApi : import.meta.env.DEV ? 'http://localhost:8787' : null;
 
 export const NO_SERVER_MESSAGE =
-  'This build has no processing server configured, and this job needs one (phones, tablets, long tracks and the guitar lead/rhythm split always run on the server). ' +
+  'This build has no processing server configured, and this job needs one (the guitar lead/rhythm split, piano refinement, and tracks over the on-device limits run on the server). ' +
   'Deploy `stemsplit serve` behind HTTPS and rebuild with VITE_API_BASE set — see README › GitHub Pages.';
 
 export type Phase =
@@ -35,7 +38,14 @@ export type Phase =
   | { readonly kind: 'queued-offline' }
   | { readonly kind: 'server'; readonly job: JobRecord }
   | { readonly kind: 'ready'; readonly stems: readonly StemName[]; readonly source: 'device' | 'server'; readonly warnings: readonly JobWarning[] }
+  /** A disk-path run stopped before the end; `stored` holds what can resume. */
+  | { readonly kind: 'paused'; readonly reason: string }
+  /** A disk-path run finished; its stems are in `stored` (they survive a reload). */
+  | { readonly kind: 'disk-done'; readonly clipped: readonly string[] }
   | { readonly kind: 'error'; readonly message: string; readonly canRetryOnServer: boolean };
+
+/** Phases during which a job is running (inputs and other jobs are locked). */
+export const BUSY_PHASES: ReadonlySet<Phase['kind']> = new Set(['decoding', 'model-download', 'local', 'waking', 'uploading', 'server']);
 
 const randomKey = () => crypto.getRandomValues(new Uint8Array(16)).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '');
 
@@ -63,9 +73,28 @@ export function useSeparation() {
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
   const playerRef = useRef<StemPlayer | null>(null);
   const client = useRef(API_BASE ? new ServerClient(API_BASE) : null).current;
+  const [stored, setStored] = useState<StoredDeviceRun | null>(null);
+  const diskRun = useRef<DiskRunHandle | null>(null);
+  const [diskActive, setDiskActive] = useState(false);
+
+  // What the last on-device run left (finished stems, or a stopped run to resume). A stopping worker releases its
+  // file locks shortly after terminate(), so a 'busy' scan is retried.
+  const refreshStored = useCallback(async () => {
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const result = await scanDeviceRun().catch(() => null);
+      if (result?.state !== 'busy') {
+        setStored(result);
+        return result;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    setStored(null);
+    return null;
+  }, []);
 
   useEffect(() => {
     void gatherCapabilities().then(setCaps);
+    void refreshStored();
     const online = () => {
       void gatherCapabilities().then(setCaps);
       void flushOutbox();
@@ -87,10 +116,16 @@ export function useSeparation() {
     setPhase({ kind: 'idle' });
   }, []);
 
+  // A new on-device run replaces the stored one, so its bytes count as free for the storage check.
+  const effectiveCaps: CapabilitySnapshot | null =
+    caps && stored && caps.storageAvailableBytes !== null ? { ...caps, storageAvailableBytes: caps.storageAvailableBytes + stored.bytes } : caps;
   const decision: RouteDecision | null =
-    caps && file && duration !== null
-      ? decideRoute({ caps, input: { durationSec: duration, bytes: file.size }, scope, options: { refinePiano }, preference })
+    effectiveCaps && file && duration !== null
+      ? decideRoute({ caps: effectiveCaps, input: { durationSec: duration, bytes: file.size }, scope, options: { refinePiano }, preference })
       : null;
+  const io = requireIO(PRIMARY_SEPARATION_MODEL);
+  const estimateSec =
+    decision?.target === 'device' && caps && duration !== null ? estimateDeviceSeconds(duration, decision.threads, caps.formFactor, io.segmentFrames, io.sampleRate) : null;
 
   const freshPlayer = async (): Promise<StemPlayer> => {
     await playerRef.current?.close();
@@ -138,10 +173,80 @@ export function useSeparation() {
     }
   }
 
+  /** Drives a disk-path run (start or resume) to its end, a pause, or an error. */
+  async function driveDisk(handle: DiskRunHandle): Promise<void> {
+    diskRun.current = handle;
+    setDiskActive(true);
+    try {
+      const { clipped } = await handle.done;
+      setPhase({ kind: 'disk-done', clipped });
+    } catch (e) {
+      if (e instanceof DiskRunStopped) setPhase({ kind: 'paused', reason: e.reason });
+      else setPhase({ kind: 'error', message: e instanceof Error ? e.message : String(e), canRetryOnServer: client !== null });
+    } finally {
+      diskRun.current = null;
+      setDiskActive(false);
+      await refreshStored();
+      void gatherCapabilities().then(setCaps); // storage changed
+    }
+  }
+
+  const diskCallbacks = {
+    onModelProgress: (loaded: number, total: number) => setPhase({ kind: 'model-download', fraction: loaded / total }),
+    onProgress: (p: { fraction: number; etaMs: number | null }) =>
+      setPhase({ kind: 'local', fraction: p.fraction, etaSec: p.etaMs === null ? null : Math.round(p.etaMs / 1000) }),
+  };
+
+  async function startDisk(f: File, threads: number): Promise<void> {
+    setPhase({ kind: 'decoding' });
+    await playerRef.current?.close();
+    playerRef.current = null;
+    setStored(null); // hide the old stems at once; the new run replaces them (their space was counted as free)
+    await deleteDeviceRun();
+    const input = await decodeForModel(f);
+    // Own buffers, so they can be transferred; the decoded AudioBuffer is then free to be collected.
+    const left = input.left.slice();
+    const right = input.right.slice();
+    await driveDisk(runOnDisk({ type: 'start', left, right, outputs: deviceOutputs(scope), threads, source: { name: f.name, bytes: f.size } }, diskCallbacks));
+  }
+
+  const resumeStored = useCallback(async () => {
+    if (stored?.state !== 'stopped' || diskRun.current) return;
+    setPhase({ kind: 'local', fraction: stored.done / stored.total, etaSec: null });
+    // The stored-run panel can appear before the capability probe resolves (measured in WebKit after a reload), and
+    // Resume needs only the thread count from it: wait for the probe rather than ignore the tap.
+    let current: CapabilitySnapshot | null = caps;
+    if (current === null) {
+      current = await gatherCapabilities();
+      setCaps(current);
+    }
+    await driveDisk(runOnDisk({ type: 'resume', outputs: stored.outputs, threads: deviceThreads(current) }, diskCallbacks));
+  }, [stored, caps]);
+
+  const pauseDisk = useCallback(() => diskRun.current?.stop('you paused it'), []);
+
+  const deleteStored = useCallback(async () => {
+    if (diskRun.current) return;
+    await deleteDeviceRun().catch(() => 0);
+    setPhase({ kind: 'idle' });
+    await refreshStored();
+    void gatherCapabilities().then(setCaps);
+  }, [refreshStored]);
+
+  /** A crash marker locks the in-memory path out; without a server that is permanent, so let the user clear it. */
+  const clearCrash = useCallback(() => {
+    clearCrashFlag();
+    void gatherCapabilities().then(setCaps);
+  }, []);
+
   const start = useCallback(
     async (forceServer = false) => {
       if (!file || !decision) return;
       try {
+        if (decision.target === 'device' && decision.storage === 'disk' && !forceServer) {
+          await startDisk(file, decision.threads);
+          return;
+        }
         if (decision.target === 'device' && !forceServer) {
           setPhase({ kind: 'decoding' });
           const input = await decodeForModel(file);
@@ -182,7 +287,7 @@ export function useSeparation() {
         void gatherCapabilities().then(setCaps);
       }
     },
-    [file, decision, scope, refinePiano, duration],
+    [file, decision, scope, refinePiano, duration, stored],
   );
 
   return {
@@ -201,5 +306,12 @@ export function useSeparation() {
     start,
     player: playerRef,
     serverConfigured: client !== null,
+    estimateSec,
+    stored,
+    resumeStored,
+    pauseDisk,
+    diskActive,
+    deleteStored,
+    clearCrash,
   };
 }

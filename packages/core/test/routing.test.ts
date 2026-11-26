@@ -1,6 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import type { CapabilitySnapshot, RouteRequest } from '../src/index.ts';
-import { HTDEMUCS_6S_FOLDED, HTDEMUCS_6S_UPSTREAM, PRIMARY_SEPARATION_MODEL, REASON_COPY, classifyUserAgent, decideRoute, downloadBytes, normaliseDeviceMemory } from '../src/index.ts';
+import {
+  DISK_RUN_DECODE_COPIES,
+  HTDEMUCS_6S_FOLDED,
+  HTDEMUCS_6S_UPSTREAM,
+  LOCAL_LIMITS,
+  PLATFORM_CEILINGS,
+  PRIMARY_SEPARATION_MODEL,
+  REASON_COPY,
+  classifyUserAgent,
+  decideRoute,
+  deviceOutputs,
+  deviceThreads,
+  estimateDeviceSeconds,
+  downloadBytes,
+  normaliseDeviceMemory,
+  projectDiskRunPeak,
+  runStorageNeed,
+} from '../src/index.ts';
 
 const desktop: CapabilitySnapshot = {
   formFactor: 'desktop',
@@ -15,6 +32,7 @@ const desktop: CapabilitySnapshot = {
   online: true,
   storageAvailableBytes: 10 * 2 ** 30,
   modelCached: true,
+  opfsWritable: true,
 };
 
 const iphone: CapabilitySnapshot = {
@@ -64,23 +82,70 @@ describe('decideRoute', () => {
     expect(roomy.target).toBe('device');
   });
 
-  it('always offloads phones, even when the user prefers the device', () => {
-    const d = decideRoute(base({ caps: iphone, preference: 'prefer-device' }));
-    expect(d.target).toBe('server');
-    expect(d.reasons).toContain('phone_form_factor');
+  it('runs a phone on device on the disk path when the evidence holds (measured heap, writable OPFS, isolation)', () => {
+    const d = decideRoute(base({ caps: iphone, input: { durationSec: 240, bytes: 8e6 } }));
+    expect(d.target).toBe('device');
+    if (d.target !== 'device') return;
+    expect(d).toMatchObject({ storage: 'disk', ep: 'wasm', threads: 1, reasons: ['eligible_wasm'] });
+    expect(d.memory.kind).toBe('disk');
   });
 
-  it('offloads iPad (WebKit, no deviceMemory) and flags the memory projection', () => {
-    const d = decideRoute(base({ caps: { ...iphone, formFactor: 'tablet' } }));
-    expect(d.target).toBe('server');
-    expect(d.reasons).toEqual(expect.arrayContaining(['device_memory_unknown_mobile', 'memory_projection_exceeds_ceiling']));
+  it("takes the disk path on the owner's iPhone too, whose desktop-class UA classifies as a tablet", () => {
+    const ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.2 Safari/605.1.15';
+    const caps = { ...iphone, ...classifyUserAgent(ua, 5, null) };
+    expect(caps.formFactor).toBe('tablet');
+    const d = decideRoute(base({ caps }));
+    expect(d.target === 'device' && d.storage).toBe('disk');
   });
 
-  it('offloads an 8 GiB Android tablet with WebGPU on the measured memory budget alone', () => {
+  it('runs an 8 GiB Android tablet with WebGPU on the WASM disk path (the validated build)', () => {
     const tablet = { ...desktop, formFactor: 'tablet' as const, deviceMemoryGiB: 8 };
     const d = decideRoute(base({ caps: tablet }));
+    expect(d.target === 'device' && [d.storage, d.ep]).toEqual(['disk', 'wasm']);
+  });
+
+  it('keeps phones on the server when the window cannot store files (Safari Private Browsing)', () => {
+    for (const opfsWritable of [false, null]) {
+      const d = decideRoute(base({ caps: { ...iphone, opfsWritable }, preference: 'prefer-device' }));
+      expect(d.target).toBe('server');
+      expect(d.reasons).toContain('storage_not_writable');
+    }
+  });
+
+  it('keeps phones on the server for a model without a measured mobile profile', () => {
+    const d = decideRoute(base({ caps: iphone, model: HTDEMUCS_6S_FOLDED }));
     expect(d.target).toBe('server');
-    expect(d.reasons).toEqual(['memory_projection_exceeds_ceiling']);
+    expect(d.reasons).toContain('mobile_profile_unmeasured');
+  });
+
+  it('applies the mobile duration cap', () => {
+    const cap = LOCAL_LIMITS.maxDurationSecMobile;
+    expect(decideRoute(base({ caps: iphone, input: { durationSec: cap, bytes: 20e6 } })).target).toBe('device');
+    expect(decideRoute(base({ caps: iphone, input: { durationSec: cap + 1, bytes: 20e6 } })).reasons).toContain('duration_over_local_cap');
+  });
+
+  it('checks storage for the projected stems plus the stored song, so a quick scope needs less', () => {
+    const frames = 300 * 44_100;
+    const fmt = { sampleRate: 44_100, channels: 2, sampleFormat: 'pcm24' } as const;
+    const full = runStorageNeed(frames, deviceOutputs('full').length, fmt).total;
+    const quick = runStorageNeed(frames, deviceOutputs('quick').length, fmt).total;
+    expect(deviceOutputs('quick')).toEqual(['vocals', 'drums', 'bass', 'other']);
+    expect(quick).toBeLessThan(full);
+    const caps = { ...iphone, storageAvailableBytes: (quick + full) / 2 * 1.1 };
+    const input = { durationSec: 300, bytes: 10e6 };
+    expect(decideRoute(base({ caps, input, scope: 'full' })).reasons).toContain('insufficient_storage_for_stems');
+    expect(decideRoute(base({ caps, input, scope: 'quick' })).target).toBe('device');
+  });
+
+  it('does not lock phones out after a killed run (it resumes), but still guards the in-memory desktop path', () => {
+    expect(decideRoute(base({ caps: { ...iphone, crashFlag: true } })).target).toBe('device');
+    expect(decideRoute(base({ caps: { ...desktop, crashFlag: true } })).reasons).toContain('crash_flag');
+  });
+
+  it('offloads phones reporting 2 GiB or less, but not 4 GiB', () => {
+    const android = { ...desktop, formFactor: 'phone' as const };
+    expect(decideRoute(base({ caps: { ...android, deviceMemoryGiB: 2 } })).reasons).toContain('device_memory_low');
+    expect(decideRoute(base({ caps: { ...android, deviceMemoryGiB: 4 } })).target).toBe('device');
   });
 
   it('offloads ≤ 4 GiB devices', () => {
@@ -134,11 +199,55 @@ describe('decideRoute', () => {
   });
 
   it('warns that offline server jobs will be queued', () => {
-    expect(decideRoute(base({ caps: { ...iphone, online: false } })).warnings).toContain('offline_server_job_queued');
+    expect(decideRoute(base({ caps: { ...iphone, online: false }, preference: 'force-server' })).warnings).toContain('offline_server_job_queued');
   });
 
   it('has user-facing copy for every reason', () => {
     for (const v of Object.values(REASON_COPY)) expect(v.length).toBeGreaterThan(10);
+  });
+});
+
+describe('disk-run memory projection', () => {
+  it('is flat in song length during separation and stays under the iOS ceiling at the mobile cap', () => {
+    const model = PRIMARY_SEPARATION_MODEL;
+    const short = projectDiskRunPeak({ model, inputFrames: 44_100 * 30, compressedBytes: 1e6 })!;
+    const long = projectDiskRunPeak({ model, inputFrames: 44_100 * LOCAL_LIMITS.maxDurationSecMobile, compressedBytes: 20e6 })!;
+    expect(long.inferencePeakBytes).toBe(short.inferencePeakBytes);
+    expect(short.inferencePeakBytes).toBeGreaterThan(model.browserHeapBytes!);
+    expect(long.decodePeakBytes).toBe(20e6 + DISK_RUN_DECODE_COPIES.value * 44_100 * LOCAL_LIMITS.maxDurationSecMobile * 2 * 4);
+    expect(long.projectedPeakBytes).toBe(Math.max(long.decodePeakBytes, long.inferencePeakBytes));
+    expect(long.projectedPeakBytes).toBeLessThanOrEqual(PLATFORM_CEILINGS['ios-safari'].abortAboveBytes.value);
+    expect(long.hasEstimates).toBe(true); // the resampler allowance
+  });
+
+  it('has no projection for a model without a measured browser heap', () => {
+    expect(projectDiskRunPeak({ model: HTDEMUCS_6S_FOLDED, inputFrames: 1000, compressedBytes: 0 })).toBeNull();
+  });
+});
+
+describe('deviceThreads', () => {
+  it('uses one thread on phones and tablets until the iPhone thread test is measured, up to 4 on desktop', () => {
+    expect(deviceThreads({ formFactor: 'phone', crossOriginIsolated: true, hardwareConcurrency: 6 })).toBe(1);
+    expect(deviceThreads({ formFactor: 'tablet', crossOriginIsolated: true, hardwareConcurrency: 8 })).toBe(1);
+    expect(deviceThreads({ formFactor: 'desktop', crossOriginIsolated: true, hardwareConcurrency: 8 })).toBe(4);
+    expect(deviceThreads({ formFactor: 'desktop', crossOriginIsolated: true, hardwareConcurrency: 2 })).toBe(2);
+    expect(deviceThreads({ formFactor: 'desktop', crossOriginIsolated: false, hardwareConcurrency: 8 })).toBe(1);
+    expect(deviceThreads({ formFactor: 'desktop', crossOriginIsolated: true, hardwareConcurrency: null })).toBe(2);
+  });
+});
+
+describe('estimateDeviceSeconds', () => {
+  const io = PRIMARY_SEPARATION_MODEL.io!;
+  it('multiplies the measured seconds per window by the window count', () => {
+    // 43.2 s → 8 windows (the first full iPhone song); 4 min → 41 windows.
+    expect(estimateDeviceSeconds(43.2, 1, 'tablet', io.segmentFrames, io.sampleRate)).toBeCloseTo(8 * 12.5, 6);
+    expect(estimateDeviceSeconds(240, 1, 'phone', io.segmentFrames, io.sampleRate)).toBeCloseTo(41 * 12.5, 6);
+    expect(estimateDeviceSeconds(240, 4, 'desktop', io.segmentFrames, io.sampleRate)).toBeCloseTo(41 * 5.7, 6);
+  });
+  it('returns null for an unmeasured thread count or an unknown duration', () => {
+    expect(estimateDeviceSeconds(60, 4, 'phone', io.segmentFrames, io.sampleRate)).toBeNull();
+    expect(estimateDeviceSeconds(0, 1, 'phone', io.segmentFrames, io.sampleRate)).toBeNull();
+    expect(estimateDeviceSeconds(Number.NaN, 1, 'phone', io.segmentFrames, io.sampleRate)).toBeNull();
   });
 });
 

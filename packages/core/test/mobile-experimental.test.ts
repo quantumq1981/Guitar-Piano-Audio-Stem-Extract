@@ -3,6 +3,8 @@ import {
   capWasmMemoryDescriptor,
   graphOptimizationFor,
   PRIMARY_SEPARATION_MODEL,
+  resumeExpectationFor,
+  STAGE4_RESUME_EXPECTATION,
   HTDEMUCS_6S_FOLDED_FP16W,
   maxAbsDifference,
   MOBILE_STAGE4_CANDIDATE,
@@ -127,5 +129,14 @@ describe('stage4Threads', () => {
   it('offers only counts that start from one and stay within a phone', () => {
     expect(STAGE4_THREAD_OPTIONS[0]).toBe(1);
     expect(Math.max(...STAGE4_THREAD_OPTIONS)).toBeLessThanOrEqual(4);
+  });
+});
+
+describe('resumeExpectationFor', () => {
+  it('makes the written outputs part of a stored run\'s identity', () => {
+    const quick = resumeExpectationFor(PRIMARY_SEPARATION_MODEL, ['vocals', 'drums', 'bass', 'other']);
+    expect(quick.stems).toEqual(['vocals', 'drums', 'bass', 'other']);
+    expect(quick.graphSha256).toBe(PRIMARY_SEPARATION_MODEL.sha256);
+    expect(STAGE4_RESUME_EXPECTATION.stems).toEqual(PRIMARY_SEPARATION_MODEL.io!.stems);
   });
 });

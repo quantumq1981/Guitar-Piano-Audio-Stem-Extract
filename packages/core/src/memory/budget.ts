@@ -110,6 +110,7 @@ export function platformClass(caps: CapabilitySnapshot, ep: 'wasm' | 'webgpu'): 
 }
 
 export interface MemoryProjection {
+  readonly kind: 'in-memory';
   readonly ep: ExecutionProvider;
   readonly weightsBytes: number;
   readonly sessionCreatePeakBytes: number;
@@ -149,6 +150,7 @@ export function projectPeakMemory({ model, ep, inputFrames, streamInput, retaine
   const inferencePeakBytes = weightsBytes + act.value + ioTensors;
   const audioBuffersBytes = accumulator + decodedInput + retainedOutput;
   return {
+    kind: 'in-memory',
     ep,
     weightsBytes,
     sessionCreatePeakBytes,
@@ -156,6 +158,61 @@ export function projectPeakMemory({ model, ep, inputFrames, streamInput, retaine
     audioBuffersBytes,
     projectedPeakBytes: Math.max(sessionCreatePeakBytes, inferencePeakBytes) + audioBuffersBytes,
     hasEstimates: copies.provenance === 'estimate' || act.provenance === 'estimate',
+  };
+}
+
+/**
+ * Decoded-PCM copies alive at once while the page decodes a song for the disk path: the AudioBuffer, the planar
+ * copies made for transfer, and a resampler temporary when the source rate is not 44.1 kHz. The first two are
+ * certain; the third is an allowance [E].
+ */
+export const DISK_RUN_DECODE_COPIES: Sourced<number> = {
+  value: 3,
+  provenance: 'estimate',
+  note: 'AudioBuffer + transfer copies (2, by construction) + one resampling temporary (allowance).',
+};
+
+export interface DiskRunProjection {
+  readonly kind: 'disk';
+  /** Page while decoding: the compressed file plus DISK_RUN_DECODE_COPIES of the decoded stereo PCM. */
+  readonly decodePeakBytes: number;
+  /** Worker during separation: the measured WASM heap plus overlap-add state and one block of stems in flight. */
+  readonly inferencePeakBytes: number;
+  /**
+   * The larger of the two. They do not overlap: the worker stores the song in OPFS and drops its copy before it
+   * creates the session, and the page releases its copies once they are transferred.
+   */
+  readonly projectedPeakBytes: number;
+  readonly hasEstimates: boolean;
+}
+
+export interface DiskRunInput {
+  readonly model: ModelArtifact;
+  readonly inputFrames: number;
+  /** Size of the file the user picked (compressed), held while decoding. */
+  readonly compressedBytes: number;
+}
+
+/**
+ * Peak memory of an on-device run that streams its input and stems through OPFS (core `separate()` with
+ * interleavedFileSource + wavStemSink). Song length only enters through decoding; separation is flat (measured:
+ * 616 MiB heap over a whole song on a physical iPhone). Null when the model has no measured browser heap.
+ */
+export function projectDiskRunPeak({ model, inputFrames, compressedBytes }: DiskRunInput): DiskRunProjection | null {
+  if (model.browserHeapBytes === undefined) return null;
+  if (!Number.isSafeInteger(inputFrames) || inputFrames < 0) throw new RangeError(`Invalid frame count ${inputFrames}`);
+  const io = requireIO(model);
+  const pcmBytes = inputFrames * io.channels * 4;
+  const decodePeakBytes = Math.max(0, compressedBytes) + DISK_RUN_DECODE_COPIES.value * pcmBytes;
+  const accumulator = (io.stems.length * io.channels + 1) * io.segmentFrames * 4;
+  const blockInFlight = io.stems.length * io.channels * io.segmentFrames * 4 * 2; // float32 block + its encoded copy (upper bound)
+  const inferencePeakBytes = model.browserHeapBytes + accumulator + blockInFlight;
+  return {
+    kind: 'disk',
+    decodePeakBytes,
+    inferencePeakBytes,
+    projectedPeakBytes: Math.max(decodePeakBytes, inferencePeakBytes),
+    hasEstimates: DISK_RUN_DECODE_COPIES.provenance === 'estimate',
   };
 }
 

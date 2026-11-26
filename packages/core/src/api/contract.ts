@@ -48,6 +48,11 @@ export const LOCAL_LIMITS = {
    * (4 vCPU) [M], i.e. about real time per song with the 25 % overlap. The memory projection still guards each device.
    */
   maxDurationSecWasm: 90,
+  /**
+   * Phones and tablets (disk path: stems stream to OPFS, a stopped run resumes). Memory does not grow with length
+   * apart from decoding; time does: about 2.1 × the song at 1 thread on the measured iPhone [M per window, E per song].
+   */
+  maxDurationSecMobile: 600,
   /** Disable local inference below this battery level when not charging. */
   minBatteryLevel: 0.2,
 } as const;

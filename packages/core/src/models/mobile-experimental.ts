@@ -7,7 +7,7 @@
  * SHA-256s for both files. Measured in Chromium (WASM, one thread): parity vs native source ≥ 61.9 dB per stem
  * on the music fixture, WASM heap ≤ 616 MiB. It is not yet measured on a physical phone.
  */
-import { HTDEMUCS_6S_FOLDED_FP16W, HTDEMUCS_6S_STAGE4, requireIO, type ModelIO, type PinnedFile } from './registry.ts';
+import { HTDEMUCS_6S_FOLDED_FP16W, HTDEMUCS_6S_STAGE4, requireIO, type ModelArtifact, type ModelIO, type PinnedFile } from './registry.ts';
 import type { ResumeExpectation } from '../separation/resume.ts';
 
 export type { PinnedFile };
@@ -41,15 +41,25 @@ export const MOBILE_STAGE4_CANDIDATE: ExternalDataArtifact = {
 
 /** What a stored on-device run must match to be resumed with this artifact (core decideResume). The engine's
  * default 25 % overlap; changing it, the stem order or the graph makes older stored runs unusable, never wrong. */
-export const STAGE4_RESUME_EXPECTATION: ResumeExpectation = {
-  modelId: MOBILE_STAGE4_CANDIDATE.id,
-  graphSha256: MOBILE_STAGE4_CANDIDATE.graph.sha256,
-  sampleRate: MOBILE_STAGE4_CANDIDATE.io.sampleRate,
-  channels: MOBILE_STAGE4_CANDIDATE.io.channels,
-  segmentFrames: MOBILE_STAGE4_CANDIDATE.io.segmentFrames,
-  overlapRatio: 0.25,
-  stems: MOBILE_STAGE4_CANDIDATE.io.stems,
-};
+export const STAGE4_RESUME_EXPECTATION: ResumeExpectation = resumeExpectationFor(HTDEMUCS_6S_STAGE4, HTDEMUCS_6S_STAGE4.io!.stems);
+
+/**
+ * What a stored run of `model` writing `outputs` (in this order) must match to be resumed. The main app writes the
+ * scope's projected stems (quick: guitar and piano folded into other), so the outputs are part of the identity.
+ */
+export function resumeExpectationFor(model: ModelArtifact, outputs: readonly string[]): ResumeExpectation {
+  const io = requireIO(model);
+  if (model.sha256 === null) throw new Error(`Model ${model.id} is not pinned; a stored run could not be identified`);
+  return {
+    modelId: model.id,
+    graphSha256: model.sha256,
+    sampleRate: io.sampleRate,
+    channels: io.channels,
+    segmentFrames: io.segmentFrames,
+    overlapRatio: 0.25,
+    stems: outputs,
+  };
+}
 
 /**
  * WASM thread counts the experimental card offers. Measured in Chromium (4 vCPU, music fixture, ORT 1.31.1):
